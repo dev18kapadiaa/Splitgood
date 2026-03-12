@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phone Login - Splitgood</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v12M6 12h12"/>
+                </svg>
+                <h1>Phone Login</h1>
+                <p>We'll send you a verification code</p>
+            </div>
+
+            {% if messages %}
+            <div class="messages-container mb-4">
+                {% for message in messages %}
+                <div class="message message-{{ message.tags }}">
+                    {{ message }}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <form method="post" action="{% url 'phone_login' %}">
+                {% csrf_token %}
+
+                <div class="form-group">
+                    <label for="id_phone" class="form-label">Phone Number</label>
+                    <div class="phone-input-group">
+                        {{ form.country_code }}
+                        {{ form.phone }}
+                    </div>
+                    {% if form.phone.errors %}
+                    <div class="form-error">{{ form.phone.errors.0 }}</div>
+                    {% endif %}
+                    {% if form.country_code.errors %}
+                    <div class="form-error">{{ form.country_code.errors.0 }}</div>
+                    {% endif %}
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-lg w-full" data-testid="button-send-otp">
+                    Send Verification Code
+                </button>
+            </form>
+
+            <div class="auth-divider">
+                <span>or</span>
+            </div>
+
+            <div class="auth-alt-methods">
+                <a href="{% url 'login' %}" class="btn btn-secondary btn-lg w-full" data-testid="link-email-login">
+                    Sign in with Email
+                </a>
+            </div>
+
+            <div class="auth-footer">
+                Don't have an account? <a href="{% url 'signup' %}" data-testid="link-signup">Sign up</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Set Your Name - Splitgood</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v12M6 12h12"/>
+                </svg>
+                <h1>Almost there!</h1>
+                <p>What should we call you?</p>
+            </div>
+
+            <form method="post" action="{% url 'phone_set_name' %}">
+                {% csrf_token %}
+
+                <div class="form-group">
+                    <label for="id_display_name" class="form-label">Your Name</label>
+                    {{ form.display_name }}
+                    {% if form.display_name.errors %}
+                    <div class="form-error">{{ form.display_name.errors.0 }}</div>
+                    {% endif %}
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-lg w-full" data-testid="button-set-name">
+                    Continue
+                </button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

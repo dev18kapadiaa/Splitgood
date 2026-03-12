@@ -1,0 +1,7 @@
+<div class="{{ avatar_class|default:'member-avatar' }}" style="{% if size %}width: {{ size }}px; height: {{ size }}px;{% endif %}{% if font_size %} font-size: {{ font_size }};{% endif %}{% if not user_obj.get_profile_image_url %} background-color: {{ user_obj.avatar_color }};{% endif %}">
+    {% if user_obj.get_profile_image_url %}
+    <img src="{{ user_obj.get_profile_image_url }}" alt="{{ user_obj.get_display_name }}" class="avatar-image" loading="lazy">
+    {% else %}
+    <span class="avatar-initials">{{ user_obj.get_initials }}</span>
+    {% endif %}
+</div>

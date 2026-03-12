@@ -1,0 +1,73 @@
+{% extends 'base.html' %}
+{% load currency_tags %}
+
+{% block title %}Groups - Splitgood{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-header-actions">
+        <div>
+            <h1 class="page-title">Your Groups</h1>
+            <p class="page-subtitle">Manage your expense sharing groups</p>
+        </div>
+        <a href="{% url 'group_create' %}" class="btn btn-primary" data-testid="button-create-group">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            New Group
+        </a>
+    </div>
+</div>
+
+{% if groups %}
+<div class="groups-grid">
+    {% for item in groups %}
+    <a href="{% url 'group_detail' item.group.id %}" class="group-card" style="text-decoration: none;" data-testid="group-card-{{ forloop.counter }}">
+        <div class="group-header">
+            <div class="group-icon" style="background-color: {{ item.group.group_color }}">
+                {{ item.group.name|slice:":2"|upper }}
+            </div>
+            <div class="group-info">
+                <div class="group-name">{{ item.group.name }}</div>
+                <div class="group-meta">{{ item.member_count }} members</div>
+            </div>
+        </div>
+        
+        {% if item.group.description %}
+        <p style="color: var(--text-secondary); font-size: 0.875rem;">{{ item.group.description|truncatewords:15 }}</p>
+        {% endif %}
+        
+        <div class="group-balance">
+            <div class="group-balance-label">Your balance</div>
+            <div class="group-balance-value {% if item.balance|is_net_positive %}balance-positive{% elif item.balance|is_net_negative %}balance-negative{% else %}balance-neutral{% endif %}">
+                {{ item.balance_display }}
+            </div>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card">
+    <div class="card-body">
+        <div class="empty-state">
+            <div class="empty-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                    <circle cx="9" cy="7" r="4"/>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                </svg>
+            </div>
+            <div class="empty-title">No groups yet</div>
+            <div class="empty-text">Create your first group to start splitting expenses with friends</div>
+            <a href="{% url 'group_create' %}" class="btn btn-primary" data-testid="button-create-first-group">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                Create Group
+            </a>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

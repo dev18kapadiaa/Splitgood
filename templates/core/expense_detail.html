@@ -1,0 +1,165 @@
+{% extends 'base.html' %}
+{% load humanize %}
+{% load currency_tags %}
+
+{% block title %}{{ expense.title }} - Splitgood{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-header-actions">
+        <div>
+            <a href="{% url 'group_detail' expense.group.id %}" style="color: var(--text-secondary); font-size: 0.875rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="15 18 9 12 15 6"/>
+                </svg>
+                {{ expense.group.name }}
+            </a>
+            <h1 class="page-title" data-testid="text-expense-title">{{ expense.title }}</h1>
+            <p class="page-subtitle">{{ expense.date|date:"F d, Y" }}</p>
+        </div>
+        <div class="flex gap-2">
+            <a href="{% url 'expense_edit' expense.id %}" class="btn btn-secondary" data-testid="button-edit-expense">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+                Edit
+            </a>
+            <a href="{% url 'expense_delete' expense.id %}" class="btn btn-danger" data-testid="button-delete-expense">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                </svg>
+                Delete
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <!-- Expense Details -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">Details</h2>
+        </div>
+        <div class="card-body">
+            <div style="margin-bottom: 1.5rem;">
+                <div style="font-size: 2.5rem; font-weight: 700; color: var(--text);" data-testid="text-expense-amount">
+                    {{ expense.currency|currency_symbol }}{{ expense.total_amount|floatformat:2 }}
+                </div>
+                <div style="color: var(--text-muted); font-size: 0.875rem;">{{ expense.currency }}</div>
+                <div style="color: var(--text-secondary);">
+                    Paid by <strong>{{ expense.paid_by.get_display_name }}</strong>
+                </div>
+            </div>
+            
+            <div style="display: grid; gap: 1rem;">
+                <div>
+                    <div style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.25rem;">Split Type</div>
+                    <div style="font-weight: 500;">{{ expense.get_split_type_display }}</div>
+                </div>
+                
+                <div>
+                    <div style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.25rem;">Added by</div>
+                    <div style="font-weight: 500;">{{ expense.created_by.get_display_name }}</div>
+                </div>
+                
+                {% if expense.notes %}
+                <div>
+                    <div style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.25rem;">Notes</div>
+                    <div>{{ expense.notes }}</div>
+                </div>
+                {% endif %}
+                
+                {% if expense.receipt_image %}
+                <div>
+                    <div style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.25rem;">Receipt</div>
+                    <a href="{{ expense.receipt_image.url }}" target="_blank" class="btn btn-secondary btn-sm">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            <circle cx="8.5" cy="8.5" r="1.5"/>
+                            <polyline points="21 15 16 10 5 21"/>
+                        </svg>
+                        View Receipt
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Participants -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">Participants</h2>
+        </div>
+        <div class="card-body">
+            <div class="members-list">
+                {% for share in shares %}
+                <div class="member-item" data-testid="share-item-{{ forloop.counter }}">
+                    {% include 'core/includes/user_avatar.html' with user_obj=share.user avatar_class='member-avatar' size=40 %}
+                    <div class="member-info">
+                        <div class="member-name">
+                            {{ share.user.get_display_name }}
+                            {% if share.user == expense.paid_by %}
+                            <span style="background: var(--success-light); color: var(--success); padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; margin-left: 0.5rem;">Paid</span>
+                            {% endif %}
+                        </div>
+                        <div class="member-role">
+                            {% if share.user == expense.paid_by %}
+                                Paid {{ expense.currency|currency_symbol }}{{ expense.total_amount|floatformat:2 }}
+                            {% else %}
+                                Owes
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="member-balance {% if share.user == expense.paid_by %}balance-positive{% else %}balance-negative{% endif %}">
+                        {% if share.user == expense.paid_by %}
+                            +{{ expense.currency|currency_symbol }}{{ share.amount_owed|floatformat:2 }}
+                        {% else %}
+                            -{{ expense.currency|currency_symbol }}{{ share.amount_owed|floatformat:2 }}
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Comments Section -->
+<div class="card mt-5 comments-section">
+    <div class="card-header">
+        <h2 class="card-title">Comments</h2>
+    </div>
+    <div class="card-body">
+        {% if comments %}
+        <div class="comment-list">
+            {% for comment in comments %}
+            <div class="comment-item" data-testid="comment-item-{{ forloop.counter }}">
+                {% include 'core/includes/user_avatar.html' with user_obj=comment.user avatar_class='comment-avatar' size=36 font_size='0.8125rem' %}
+                <div class="comment-content">
+                    <div class="comment-header">
+                        <span class="comment-author">{{ comment.user.get_display_name }}</span>
+                        <span class="comment-time">{{ comment.created_at|timesince }} ago</span>
+                    </div>
+                    <div class="comment-text">{{ comment.content }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p style="color: var(--text-muted); margin-bottom: 1rem;">No comments yet</p>
+        {% endif %}
+        
+        <form method="post" style="margin-top: 1rem;">
+            {% csrf_token %}
+            <div class="form-group mb-3">
+                {{ comment_form.content }}
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm" data-testid="button-add-comment">
+                Add Comment
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

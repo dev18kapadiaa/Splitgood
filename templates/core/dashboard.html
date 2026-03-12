@@ -1,0 +1,289 @@
+{% extends 'base.html' %}
+{% load currency_tags %}
+
+{% block title %}Dashboard - Splitgood{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-header-actions">
+        <div>
+            <h1 class="page-title" data-testid="text-page-title">Dashboard</h1>
+            <p class="page-subtitle">Welcome back, {{ user.get_display_name }}</p>
+        </div>
+        <a href="{% url 'group_create' %}" class="btn btn-primary" data-testid="button-create-group">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            New Group
+        </a>
+    </div>
+</div>
+
+<div class="currency-toggle-bar" data-testid="currency-toggle-bar">
+    <span class="currency-toggle-label">View balances in:</span>
+    <span class="currency-toggle-label" style="font-weight:400">RAW</span>
+    <label class="toggle-switch" data-testid="toggle-unified">
+        <input type="checkbox" id="unified-toggle">
+        <span class="toggle-slider"></span>
+    </label>
+    <span class="currency-toggle-label" style="font-weight:400">UNIFIED</span>
+    <span id="unified-select-wrapper" style="display:none">
+        <select id="unified-currency" class="unified-currency-select" data-testid="select-unified-currency">
+            <option value="USD">USD - US Dollar</option>
+            <option value="EUR">EUR - Euro</option>
+            <option value="GBP">GBP - British Pound</option>
+            <option value="INR">INR - Indian Rupee</option>
+            <option value="JPY">JPY - Japanese Yen</option>
+            <option value="CAD">CAD - Canadian Dollar</option>
+            <option value="AUD">AUD - Australian Dollar</option>
+            <option value="CHF">CHF - Swiss Franc</option>
+            <option value="CNY">CNY - Chinese Yuan</option>
+            <option value="AED">AED - UAE Dirham</option>
+            <option value="SGD">SGD - Singapore Dollar</option>
+            <option value="HKD">HKD - Hong Kong Dollar</option>
+            <option value="NZD">NZD - New Zealand Dollar</option>
+            <option value="ZAR">ZAR - South African Rand</option>
+            <option value="SEK">SEK - Swedish Krona</option>
+            <option value="NOK">NOK - Norwegian Krone</option>
+            <option value="DKK">DKK - Danish Krone</option>
+            <option value="SAR">SAR - Saudi Riyal</option>
+            <option value="QAR">QAR - Qatari Rial</option>
+            <option value="THB">THB - Thai Baht</option>
+            <option value="KRW">KRW - South Korean Won</option>
+            <option value="MYR">MYR - Malaysian Ringgit</option>
+            <option value="BRL">BRL - Brazilian Real</option>
+            <option value="MXN">MXN - Mexican Peso</option>
+            <option value="PLN">PLN - Polish Zloty</option>
+            <option value="TRY">TRY - Turkish Lira</option>
+            <option value="RUB">RUB - Russian Ruble</option>
+            <option value="IDR">IDR - Indonesian Rupiah</option>
+            <option value="PHP">PHP - Philippine Peso</option>
+            <option value="CZK">CZK - Czech Koruna</option>
+            <option value="HUF">HUF - Hungarian Forint</option>
+            <option value="PKR">PKR - Pakistani Rupee</option>
+            <option value="EGP">EGP - Egyptian Pound</option>
+            <option value="NGN">NGN - Nigerian Naira</option>
+            <option value="KES">KES - Kenyan Shilling</option>
+            <option value="BDT">BDT - Bangladeshi Taka</option>
+            <option value="VND">VND - Vietnamese Dong</option>
+            <option value="KWD">KWD - Kuwaiti Dinar</option>
+            <option value="BHD">BHD - Bahraini Dinar</option>
+            <option value="OMR">OMR - Omani Rial</option>
+            <option value="JOD">JOD - Jordanian Dinar</option>
+            <option value="RON">RON - Romanian Leu</option>
+            <option value="BGN">BGN - Bulgarian Lev</option>
+            <option value="UAH">UAH - Ukrainian Hryvnia</option>
+            <option value="COP">COP - Colombian Peso</option>
+            <option value="ARS">ARS - Argentine Peso</option>
+            <option value="PEN">PEN - Peruvian Sol</option>
+            <option value="CLP">CLP - Chilean Peso</option>
+            <option value="TWD">TWD - New Taiwan Dollar</option>
+            <option value="ISK">ISK - Icelandic Krona</option>
+        </select>
+    </span>
+    <span id="fx-timestamp" class="fx-timestamp" data-testid="text-fx-timestamp"></span>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon stat-icon-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="1" x2="12" y2="23"/>
+                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+        </div>
+        <div class="stat-label">Total Balance</div>
+        <div class="stat-value balance-neutral" data-balance-type="total" data-testid="text-total-balance">
+            {{ balance_display }}
+        </div>
+        <div class="balance-label" data-balance-label="total" style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 0.25rem;">
+            {% if balance|is_net_positive %}You are owed{% elif balance|is_net_negative %}You owe{% else %}You're all settled up{% endif %}
+        </div>
+    </div>
+    
+    <div class="stat-card">
+        <div class="stat-icon stat-icon-success">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+        </div>
+        <div class="stat-label">Groups</div>
+        <div class="stat-value" data-testid="text-group-count">{{ groups|length }}</div>
+    </div>
+    
+    <div class="stat-card">
+        <div class="stat-icon stat-icon-warning">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+                <line x1="1" y1="10" x2="23" y2="10"/>
+            </svg>
+        </div>
+        <div class="stat-label">Recent Expenses</div>
+        <div class="stat-value" data-testid="text-expense-count">{{ recent_expenses|length }}</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">Balances with Friends</h2>
+        </div>
+        <div class="card-body">
+            {% if balances_by_user %}
+            <div class="members-list">
+                {% for item in balances_by_user %}
+                <div class="member-item" data-testid="member-balance-{{ forloop.counter }}" data-friend-balance="{{ forloop.counter0 }}">
+                    {% include 'core/includes/user_avatar.html' with user_obj=item.user avatar_class='member-avatar' size=40 %}
+                    <div class="member-info">
+                        <div class="member-name">{{ item.user.get_display_name }}</div>
+                        <div class="member-role" data-balance-owe-label>
+                            {% if item.owed_to_user %}
+                                <div class="balance-positive">Owes You: {{ item.owed_to_user|multi_currency_add }}</div>
+                            {% endif %}
+                            {% if item.owed_by_user %}
+                                <div class="balance-negative">You Owe: {{ item.owed_by_user|multi_currency_add }}</div>
+                            {% endif %}
+                            {% if not item.owed_to_user and not item.owed_by_user %}
+                                <span class="balance-neutral">settled</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="member-balance balance-neutral" data-balance-value>
+                        {% if item.owed_to_user %}
+                        <span class="balance-positive" data-testid="balance-positive">
+                            {{ item.owed_to_user|multi_currency_add }}
+                        </span>
+                        {% endif %}
+                        {% if item.owed_by_user %}
+                        <span class="balance-negative" data-testid="balance-negative">
+                            {{ item.owed_by_user|multi_currency_add }}
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <div class="empty-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="16" x2="12" y2="12"/>
+                        <line x1="12" y1="8" x2="12.01" y2="8"/>
+                    </svg>
+                </div>
+                <div class="empty-title">All settled up!</div>
+                <div class="empty-text">No outstanding balances</div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">Your Groups</h2>
+            <a href="{% url 'group_list' %}" class="btn btn-ghost btn-sm">View All</a>
+        </div>
+        <div class="card-body">
+            {% if groups %}
+            <div class="members-list">
+                {% for group in groups %}
+                <a href="{% url 'group_detail' group.id %}" class="member-item" style="text-decoration: none;" data-testid="group-link-{{ forloop.counter }}">
+                    <div class="member-avatar" style="background-color: {{ group.group_color }}">
+                        {{ group.name|slice:":2"|upper }}
+                    </div>
+                    <div class="member-info">
+                        <div class="member-name">{{ group.name }}</div>
+                        <div class="member-role">{{ group.memberships.count }} members</div>
+                    </div>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted)">
+                        <polyline points="9 18 15 12 9 6"/>
+                    </svg>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <div class="empty-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                </div>
+                <div class="empty-title">No groups yet</div>
+                <div class="empty-text">Create a group to start splitting expenses</div>
+                <a href="{% url 'group_create' %}" class="btn btn-primary" data-testid="button-create-first-group">Create Group</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card mt-5">
+    <div class="card-header">
+        <h2 class="card-title">Recent Activity</h2>
+        <a href="{% url 'activity_feed' %}" class="btn btn-ghost btn-sm">View All</a>
+    </div>
+    <div class="card-body">
+        {% if recent_activity %}
+        <div class="activity-list">
+            {% for activity in recent_activity %}
+            <div class="activity-item" data-testid="activity-item-{{ forloop.counter }}">
+                <div class="activity-icon {% if 'expense' in activity.action %}activity-icon-expense{% elif 'payment' in activity.action %}activity-icon-payment{% else %}activity-icon-group{% endif %}">
+                    {% if 'expense' in activity.action %}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+                        <line x1="1" y1="10" x2="23" y2="10"/>
+                    </svg>
+                    {% elif 'payment' in activity.action %}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="1" x2="12" y2="23"/>
+                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                    </svg>
+                    {% else %}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                    </svg>
+                    {% endif %}
+                </div>
+                <div class="activity-content">
+                    <div class="activity-text">
+                        <strong>{{ activity.user.get_display_name }}</strong> {{ activity.description }}
+                        {% if activity.group %}<span style="color: var(--text-muted)">in {{ activity.group.name }}</span>{% endif %}
+                    </div>
+                    <div class="activity-time">{{ activity.created_at|timesince }} ago</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+            </div>
+            <div class="empty-title">No activity yet</div>
+            <div class="empty-text">Your recent activity will appear here</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    CurrencyToggle.initDashboard({
+        totalBalance: {{ balance_json|safe }},
+        friendBalances: {{ balances_by_user_json|safe }}
+    });
+});
+</script>
+{% endblock %}

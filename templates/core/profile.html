@@ -1,0 +1,529 @@
+{% extends 'base.html' %}
+{% load currency_tags %}
+
+{% block title %}Profile - Splitgood{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/cropperjs@1.6.2/dist/cropper.min.css">
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Profile Settings</h1>
+    <p class="page-subtitle">Manage your account preferences</p>
+</div>
+
+<div class="grid-2">
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">Account Information</h2>
+            </div>
+            <div class="card-body">
+                <div class="flex gap-4 mb-5">
+                    {% include 'core/includes/user_avatar.html' with user_obj=user avatar_class='user-avatar' size=80 font_size='1.5rem' %}
+                    <div>
+                        <h3 style="font-weight: 600; margin-bottom: 0.25rem;">{{ user.get_display_name }}</h3>
+                        <p style="color: var(--text-secondary);">{{ user.email }}</p>
+                        {% if user.phone %}
+                        <p style="color: var(--text-secondary); font-size: 0.875rem;" data-testid="text-verified-phone">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" style="display: inline; vertical-align: middle;">
+                                <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                            Phone: {{ user.phone }}
+                        </p>
+                        {% endif %}
+                        <p style="color: var(--text-muted); font-size: 0.875rem;">Member since {{ user.date_joined|date:"F Y" }}</p>
+                    </div>
+                </div>
+
+                <form method="post">
+                    {% csrf_token %}
+
+                    <div class="form-group">
+                        <label for="profile-image-input" class="form-label">Edit or Upload Profile Picture</label>
+                        <input type="file" id="profile-image-input" class="form-input" accept="image/*">
+                        <input type="hidden" name="cropped_image_data" id="cropped-image-data">
+                        <input type="hidden" name="remove_profile_picture" id="remove-profile-picture" value="0">
+                        {% if user.get_profile_image_url %}
+                        <div class="mt-2">
+                            <button type="button" class="btn btn-secondary btn-sm" id="remove-profile-picture-button">Remove Profile Picture</button>
+                        </div>
+                        {% endif %}
+                        <div id="remove-profile-picture-note" class="form-hint" style="display: none; color: var(--danger);">Profile picture will be removed when you click Save Changes.</div>
+                        <div class="form-hint">Upload and crop a square profile picture before saving.</div>
+                    </div>
+
+                    <div id="cropper-section" style="display: none; margin-bottom: 1rem;">
+                        <div class="cropper-wrapper">
+                            <img id="cropper-target" alt="Crop your profile image">
+                        </div>
+                        <div class="flex gap-2 mt-3">
+                            <button type="button" class="btn btn-primary btn-sm" id="apply-crop-button">Apply Crop</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="cancel-crop-button">Cancel</button>
+                        </div>
+                    </div>
+
+                    <div id="crop-preview-section" style="display: none; margin-bottom: 1rem;">
+                        <label class="form-label">Cropped Preview</label>
+                        <img id="cropped-preview" class="profile-cropped-preview" alt="Cropped profile preview">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="id_display_name" class="form-label">Display Name</label>
+                        {{ form.display_name }}
+                        <div class="form-hint">This is how other users will see you</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Email</label>
+                        <input type="email" class="form-input" value="{{ user.email }}" disabled readonly style="background: var(--bg-secondary); cursor: not-allowed; opacity: 0.7;">
+                        <div class="form-hint">Email cannot be changed</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Phone Number</label>
+                        <div class="flex gap-2 align-center">
+                            <input type="text" class="form-input" value="{{ user.phone|default:'Not set' }}" disabled readonly style="background: var(--bg-secondary); cursor: not-allowed; opacity: 0.7; flex: 1;" id="display-phone">
+                            <button type="button" class="btn btn-secondary" onclick="openPhoneModal()" data-testid="button-edit-phone">
+                                Edit
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="id_currency" class="form-label">Currency</label>
+                            {{ form.currency }}
+                        </div>
+
+                        <div class="form-group">
+                            <label for="id_timezone" class="form-label">Timezone</label>
+                            {{ form.timezone }}
+                        </div>
+                    </div>
+
+                    <div class="flex gap-3 mt-4">
+                        <button type="submit" class="btn btn-primary" data-testid="button-save-profile">
+                            Save Changes
+                        </button>
+                        <a href="{% url 'dashboard' %}" class="btn btn-secondary">Cancel</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <div class="card mb-4">
+            <div class="card-header">
+                <h2 class="card-title">Ledger Summary</h2>
+            </div>
+            <div class="card-body">
+                <div class="stat-card mb-4">
+                    <div class="stat-label">Overall Balance</div>
+                    <div class="stat-value balance-large {% if total_balance|is_net_positive %}balance-positive{% elif total_balance|is_net_negative %}balance-negative{% else %}balance-neutral{% endif %}" data-testid="text-total-balance">
+                        {{ total_balance_display }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">Groups Joined ({{ groups_with_balances|length }})</h2>
+            </div>
+            <div class="card-body">
+                {% if groups_with_balances %}
+                <div class="members-list">
+                    {% for item in groups_with_balances %}
+                    <a href="{% url 'group_detail' item.group.id %}" class="member-item" style="text-decoration: none;" data-testid="profile-group-{{ forloop.counter }}">
+                        <div class="group-icon" style="background-color: {{ item.group.group_color }}; width: 36px; height: 36px; font-size: 0.75rem;">
+                            {{ item.group.name|slice:":2"|upper }}
+                        </div>
+                        <div class="member-info">
+                            <div class="member-name">{{ item.group.name }}</div>
+                            <div class="member-role">{{ item.role }}</div>
+                        </div>
+                        <div class="member-balance {% if item.balance|is_net_positive %}balance-positive{% elif item.balance|is_net_negative %}balance-negative{% else %}balance-neutral{% endif %}">
+                            {{ item.balance_display }}
+                        </div>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p style="color: var(--text-secondary); text-align: center; padding: 1rem 0;">No groups yet</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="phone-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content" style="max-width: 420px;">
+        <div class="modal-header">
+            <h3>Edit Contact Number</h3>
+            <button type="button" class="modal-close" onclick="closePhoneModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="phone-step-1">
+                <div class="form-group">
+                    <label class="form-label">Country Code</label>
+                    <select id="modal-country-code" class="form-select" data-testid="select-modal-country-code">
+                        <option value="+1">+1 (US/CA)</option>
+                        <option value="+44">+44 (UK)</option>
+                        <option value="+91">+91 (India)</option>
+                        <option value="+61">+61 (Australia)</option>
+                        <option value="+33">+33 (France)</option>
+                        <option value="+49">+49 (Germany)</option>
+                        <option value="+81">+81 (Japan)</option>
+                        <option value="+86">+86 (China)</option>
+                        <option value="+55">+55 (Brazil)</option>
+                        <option value="+52">+52 (Mexico)</option>
+                        <option value="+82">+82 (S. Korea)</option>
+                        <option value="+39">+39 (Italy)</option>
+                        <option value="+34">+34 (Spain)</option>
+                        <option value="+7">+7 (Russia)</option>
+                        <option value="+62">+62 (Indonesia)</option>
+                        <option value="+63">+63 (Philippines)</option>
+                        <option value="+65">+65 (Singapore)</option>
+                        <option value="+971">+971 (UAE)</option>
+                        <option value="+972">+972 (Israel)</option>
+                        <option value="+234">+234 (Nigeria)</option>
+                        <option value="+27">+27 (S. Africa)</option>
+                        <option value="+64">+64 (N. Zealand)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Phone Number</label>
+                    <input type="text" id="modal-phone" class="form-input" placeholder="2345678901" inputmode="tel" data-testid="input-modal-phone">
+                </div>
+                <div id="phone-error" class="form-error" style="display: none;"></div>
+                <button type="button" class="btn btn-primary w-full" onclick="sendPhoneOtp()" data-testid="button-send-phone-otp">
+                    Send Verification Code
+                </button>
+            </div>
+
+            <div id="phone-step-2" style="display: none;">
+                <p style="color: var(--text-secondary); margin-bottom: 1rem;">Enter the 6-digit code sent to your phone.</p>
+                <div class="form-group">
+                    <label class="form-label">Verification Code</label>
+                    <input type="text" id="modal-otp" class="form-input" placeholder="Enter 6-digit code" maxlength="6" inputmode="numeric" pattern="[0-9]{6}" data-testid="input-modal-otp">
+                </div>
+                <div id="otp-error" class="form-error" style="display: none;"></div>
+                <button type="button" class="btn btn-primary w-full" onclick="verifyPhoneOtp()" data-testid="button-verify-phone-otp">
+                    Verify & Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal-content {
+    background: var(--bg-primary);
+    border-radius: 12px;
+    padding: 0;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+.modal-header h3 {
+    margin: 0;
+    font-weight: 600;
+}
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 0;
+    line-height: 1;
+}
+.modal-body {
+    padding: 1.5rem;
+}
+
+.cropper-wrapper {
+    width: 100%;
+    max-width: 420px;
+    min-height: 280px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.cropper-wrapper img {
+    display: block;
+    max-width: 100%;
+}
+
+.profile-cropped-preview {
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid var(--border-color);
+}
+</style>
+
+<script src="https://unpkg.com/cropperjs@1.6.2/dist/cropper.min.js"></script>
+<script>
+function getCookie(name) {
+    var value = '; ' + document.cookie;
+    var parts = value.split('; ' + name + '=');
+    if (parts.length === 2) return parts.pop().split(';').shift();
+}
+
+function openPhoneModal() {
+    document.getElementById('phone-modal').style.display = 'flex';
+    document.getElementById('phone-step-1').style.display = 'block';
+    document.getElementById('phone-step-2').style.display = 'none';
+    document.getElementById('phone-error').style.display = 'none';
+    document.getElementById('modal-phone').value = '';
+}
+
+function closePhoneModal() {
+    document.getElementById('phone-modal').style.display = 'none';
+}
+
+function sendPhoneOtp() {
+    var countryCode = document.getElementById('modal-country-code').value;
+    var phone = document.getElementById('modal-phone').value.trim();
+    var errorEl = document.getElementById('phone-error');
+
+    if (!phone) {
+        errorEl.textContent = 'Please enter a phone number.';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    errorEl.style.display = 'none';
+
+    var formData = new FormData();
+    formData.append('country_code', countryCode);
+    formData.append('phone', phone);
+    formData.append('csrfmiddlewaretoken', getCookie('csrftoken'));
+
+    fetch('{% url "profile_update_phone" %}', {
+        method: 'POST',
+        body: formData,
+        headers: { 'X-CSRFToken': getCookie('csrftoken') }
+    })
+    .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
+    .then(function(result) {
+        if (result.ok) {
+            document.getElementById('phone-step-1').style.display = 'none';
+            document.getElementById('phone-step-2').style.display = 'block';
+        } else {
+            errorEl.textContent = result.data.error || 'Something went wrong.';
+            errorEl.style.display = 'block';
+        }
+    })
+    .catch(function() {
+        errorEl.textContent = 'Network error. Please try again.';
+        errorEl.style.display = 'block';
+    });
+}
+
+function verifyPhoneOtp() {
+    var otp = document.getElementById('modal-otp').value.trim();
+    var errorEl = document.getElementById('otp-error');
+
+    if (!otp || otp.length !== 6) {
+        errorEl.textContent = 'Please enter a valid 6-digit code.';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    errorEl.style.display = 'none';
+
+    fetch('{% url "profile_verify_phone" %}', {
+        method: 'POST',
+        body: JSON.stringify({ otp_code: otp }),
+        headers: {
+            'X-CSRFToken': getCookie('csrftoken'),
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
+    .then(function(result) {
+        if (result.ok) {
+            document.getElementById('display-phone').value = result.data.phone;
+            var verifiedEl = document.querySelector('[data-testid="text-verified-phone"]');
+            if (verifiedEl) {
+                verifiedEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" style="display: inline; vertical-align: middle;"><polyline points="20 6 9 17 4 12"/></svg> Phone: ' + result.data.phone;
+            }
+            closePhoneModal();
+            location.reload();
+        } else {
+            errorEl.textContent = result.data.error || 'Verification failed.';
+            errorEl.style.display = 'block';
+        }
+    })
+    .catch(function() {
+        errorEl.textContent = 'Network error. Please try again.';
+        errorEl.style.display = 'block';
+    });
+}
+
+document.getElementById('phone-modal').addEventListener('click', function(e) {
+    if (e.target === this) closePhoneModal();
+});
+
+var profileImageInput = document.getElementById('profile-image-input');
+var profileForm = document.querySelector('form[method="post"]');
+var cropperSection = document.getElementById('cropper-section');
+var cropperTarget = document.getElementById('cropper-target');
+var applyCropButton = document.getElementById('apply-crop-button');
+var cancelCropButton = document.getElementById('cancel-crop-button');
+var croppedPreview = document.getElementById('cropped-preview');
+var cropPreviewSection = document.getElementById('crop-preview-section');
+var croppedImageData = document.getElementById('cropped-image-data');
+var removeProfilePicture = document.getElementById('remove-profile-picture');
+var removeProfilePictureButton = document.getElementById('remove-profile-picture-button');
+var removeProfilePictureNote = document.getElementById('remove-profile-picture-note');
+var activeCropper = null;
+
+function buildCroppedImageData() {
+    if (!activeCropper) {
+        return '';
+    }
+
+    var canvas = activeCropper.getCroppedCanvas({
+        width: 500,
+        height: 500,
+        imageSmoothingEnabled: true,
+        imageSmoothingQuality: 'high',
+    });
+
+    if (!canvas) {
+        return '';
+    }
+
+    return canvas.toDataURL('image/jpeg', 0.95);
+}
+
+if (profileImageInput) {
+    profileImageInput.addEventListener('change', function(event) {
+        if (removeProfilePicture) {
+            removeProfilePicture.value = '0';
+        }
+        if (removeProfilePictureNote) {
+            removeProfilePictureNote.style.display = 'none';
+        }
+        var file = event.target.files && event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        var reader = new FileReader();
+        reader.onload = function(loadEvent) {
+            cropperTarget.src = loadEvent.target.result;
+            cropperSection.style.display = 'block';
+
+            if (activeCropper) {
+                activeCropper.destroy();
+            }
+
+            activeCropper = new Cropper(cropperTarget, {
+                aspectRatio: 1,
+                viewMode: 1,
+                autoCropArea: 1,
+                responsive: true,
+                background: false,
+            });
+        };
+        reader.readAsDataURL(file);
+    });
+}
+
+if (applyCropButton) {
+    applyCropButton.addEventListener('click', function() {
+        var dataUrl = buildCroppedImageData();
+        if (!dataUrl) {
+            return;
+        }
+
+        croppedImageData.value = dataUrl;
+        croppedPreview.src = dataUrl;
+        cropPreviewSection.style.display = 'block';
+        if (removeProfilePicture) {
+            removeProfilePicture.value = '0';
+        }
+        if (removeProfilePictureNote) {
+            removeProfilePictureNote.style.display = 'none';
+        }
+    });
+}
+
+if (cancelCropButton) {
+    cancelCropButton.addEventListener('click', function() {
+        if (activeCropper) {
+            activeCropper.destroy();
+            activeCropper = null;
+        }
+        profileImageInput.value = '';
+        croppedImageData.value = '';
+        cropperTarget.src = '';
+        cropperSection.style.display = 'none';
+        cropPreviewSection.style.display = 'none';
+    });
+}
+
+if (removeProfilePictureButton) {
+    removeProfilePictureButton.addEventListener('click', function() {
+        if (activeCropper) {
+            activeCropper.destroy();
+            activeCropper = null;
+        }
+        profileImageInput.value = '';
+        croppedImageData.value = '';
+        cropperTarget.src = '';
+        cropperSection.style.display = 'none';
+        cropPreviewSection.style.display = 'none';
+        if (removeProfilePicture) {
+            removeProfilePicture.value = '1';
+        }
+        if (removeProfilePictureNote) {
+            removeProfilePictureNote.style.display = 'block';
+        }
+    });
+}
+
+if (profileForm) {
+    profileForm.addEventListener('submit', function() {
+        if (removeProfilePicture && removeProfilePicture.value === '1') {
+            return;
+        }
+
+        if (profileImageInput && profileImageInput.files && profileImageInput.files.length > 0 && !croppedImageData.value) {
+            var dataUrl = buildCroppedImageData();
+            if (dataUrl) {
+                croppedImageData.value = dataUrl;
+            }
+        }
+    });
+}
+</script>
+{% endblock %}

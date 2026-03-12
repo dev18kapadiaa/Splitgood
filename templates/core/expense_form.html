@@ -1,0 +1,149 @@
+{% extends 'base.html' %}
+
+{% block title %}{% if is_edit %}Edit{% else %}Add{% endif %} Expense - Splitgood{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">{% if is_edit %}Edit{% else %}Add{% endif %} Expense</h1>
+    <p class="page-subtitle">{% if is_edit %}Update expense details{% else %}Add an expense to {{ group.name }}{% endif %}</p>
+</div>
+
+<div class="card" style="max-width: 700px;">
+    <div class="card-body">
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            
+            <div class="form-group">
+                <label for="id_title" class="form-label">Description</label>
+                {{ form.title }}
+                {% if form.title.errors %}
+                <div class="form-error">{{ form.title.errors.0 }}</div>
+                {% endif %}
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="id_total_amount" class="form-label">Amount</label>
+                    {{ form.total_amount }}
+                    {% if form.total_amount.errors %}
+                    <div class="form-error">{{ form.total_amount.errors.0 }}</div>
+                    {% endif %}
+                </div>
+                
+                <div class="form-group">
+                    <label for="id_currency" class="form-label">Currency</label>
+                    {{ form.currency }}
+                    {% if form.currency.errors %}
+                    <div class="form-error">{{ form.currency.errors.0 }}</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="id_date" class="form-label">Date</label>
+                {{ form.date }}
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="id_paid_by" class="form-label">Paid by</label>
+                    {{ form.paid_by }}
+                </div>
+                
+                <div class="form-group">
+                    <label for="id_split_type" class="form-label">Split Type</label>
+                    {{ form.split_type }}
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Split between</label>
+                <div class="participant-list">
+                    {% for member in members %}
+                    <div class="participant-item">
+                        <input type="checkbox" 
+                               name="participants" 
+                               value="{{ member.id }}" 
+                               class="participant-checkbox"
+                               id="participant_{{ member.id }}"
+                               {% if member in form.participants.initial or not is_edit %}checked{% endif %}
+                               data-testid="checkbox-participant-{{ forloop.counter }}">
+                        {% include 'core/includes/user_avatar.html' with user_obj=member avatar_class='participant-avatar' size=36 font_size='0.8125rem' %}
+                        <div class="participant-info">
+                            <div class="participant-name">{{ member.get_display_name }}</div>
+                        </div>
+                        <div class="participant-amount unequal-split-fields hidden">
+                            <input type="number" 
+                                   name="split_amount_{{ member.id }}" 
+                                   class="form-input split-amount"
+                                   step="0.01"
+                                   min="0"
+                                   value="0"
+                                   data-user-id="{{ member.id }}"
+                                   placeholder="0.00">
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if form.participants.errors %}
+                <div class="form-error">{{ form.participants.errors.0 }}</div>
+                {% endif %}
+                
+                <div class="unequal-split-fields hidden" style="margin-top: 1rem; padding: 1rem; background: var(--gray-50); border-radius: var(--radius);">
+                    <div class="flex-between">
+                        <span>Total split:</span>
+                        <span><span class="unequal-total">$0.00</span> <span class="unequal-diff"></span></span>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.875rem;">
+                    <span class="equal-share-display"></span>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="id_notes" class="form-label">Notes (optional)</label>
+                {{ form.notes }}
+            </div>
+            
+            <div class="form-group">
+                <label for="id_receipt_image" class="form-label">Receipt Image (optional)</label>
+                {{ form.receipt_image }}
+            </div>
+            
+            <div class="flex gap-3 mt-4">
+                <button type="submit" class="btn btn-primary" data-testid="button-save-expense">
+                    {% if is_edit %}Save Changes{% else %}Add Expense{% endif %}
+                </button>
+                <a href="{% if is_edit %}{% url 'expense_detail' expense.id %}{% else %}{% url 'group_detail' group.id %}{% endif %}" class="btn btn-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const splitTypeSelect = document.getElementById('id_split_type');
+    const unequalFields = document.querySelectorAll('.unequal-split-fields');
+    
+    function toggleUnequalFields() {
+        const isUnequal = splitTypeSelect.value !== 'equal';
+        unequalFields.forEach(function(field) {
+            if (isUnequal) {
+                field.classList.remove('hidden');
+            } else {
+                field.classList.add('hidden');
+            }
+        });
+        if (isUnequal) {
+            calculateEqualShares();
+        }
+    }
+    
+    splitTypeSelect.addEventListener('change', toggleUnequalFields);
+    toggleUnequalFields();
+});
+</script>
+{% endblock %}

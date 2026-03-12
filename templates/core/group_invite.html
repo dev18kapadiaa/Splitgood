@@ -1,0 +1,99 @@
+{% extends 'base.html' %}
+
+{% block title %}Invite Member - {{ group.name }} - Splitgood{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Invite Member</h1>
+    <p class="page-subtitle">Add someone to {{ group.name }}</p>
+</div>
+
+<div class="card" style="max-width: 500px;">
+    <div class="card-body">
+        <form method="post" id="invite-form">
+            {% csrf_token %}
+
+            <div class="form-group">
+                <label for="id_display_name" class="form-label">Name</label>
+                {{ form.display_name }}
+                {% if form.display_name.errors %}
+                <div class="form-error">{{ form.display_name.errors.0 }}</div>
+                {% endif %}
+                <div class="form-hint">What should we call this person?</div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">How to reach them</label>
+                <div class="channel-selector">
+                    <label class="channel-option" data-testid="channel-email">
+                        <input type="radio" name="channel" value="email" {% if form.channel.value == 'email' or not form.channel.value %}checked{% endif %}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="4" width="20" height="16" rx="2"/>
+                            <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+                        </svg>
+                        Email
+                    </label>
+                    <label class="channel-option" data-testid="channel-phone">
+                        <input type="radio" name="channel" value="phone" {% if form.channel.value == 'phone' %}checked{% endif %}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+                        </svg>
+                        Phone
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group" id="email-field">
+                <label for="id_email" class="form-label">Email Address</label>
+                {{ form.email }}
+                {% if form.email.errors %}
+                <div class="form-error">{{ form.email.errors.0 }}</div>
+                {% endif %}
+            </div>
+
+            <div class="form-group" id="phone-field" style="display: none;">
+                <label for="id_phone" class="form-label">Phone Number</label>
+                <div class="phone-input-group">
+                    {{ form.country_code }}
+                    {{ form.phone }}
+                </div>
+                {% if form.phone.errors %}
+                <div class="form-error">{{ form.phone.errors.0 }}</div>
+                {% endif %}
+            </div>
+
+            <div class="flex gap-3 mt-4">
+                <button type="submit" class="btn btn-primary" data-testid="button-send-invite">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/>
+                    </svg>
+                    Send Invitation
+                </button>
+                <a href="{% url 'group_detail' group.id %}" class="btn btn-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const channelRadios = document.querySelectorAll('input[name="channel"]');
+    const emailField = document.getElementById('email-field');
+    const phoneField = document.getElementById('phone-field');
+
+    function toggleFields() {
+        const selected = document.querySelector('input[name="channel"]:checked').value;
+        emailField.style.display = selected === 'email' ? 'block' : 'none';
+        phoneField.style.display = selected === 'phone' ? 'block' : 'none';
+    }
+
+    channelRadios.forEach(radio => {
+        radio.addEventListener('change', toggleFields);
+    });
+
+    toggleFields();
+});
+</script>
+{% endblock %}

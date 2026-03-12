@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% load currency_tags %}
+
+{% block title %}Delete Expense - Splitgood{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">Delete Expense</h1>
+</div>
+
+<div class="card" style="max-width: 500px;">
+    <div class="card-body">
+        <div style="text-align: center; padding: 1rem 0;">
+            <div class="empty-icon" style="background: var(--danger-light); color: var(--danger);">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="15" y1="9" x2="9" y2="15"/>
+                    <line x1="9" y1="9" x2="15" y2="15"/>
+                </svg>
+            </div>
+            <h2 style="margin-bottom: 0.5rem;">Are you sure?</h2>
+            <p style="color: var(--text-secondary);">
+                You are about to delete "<strong>{{ expense.title }}</strong>" ({{ expense.currency|currency_symbol }}{{ expense.total_amount|floatformat:2 }}).
+                This action cannot be undone.
+            </p>
+        </div>
+        
+        <form method="post" style="margin-top: 1.5rem;">
+            {% csrf_token %}
+            <div class="flex gap-3" style="justify-content: center;">
+                <button type="submit" class="btn btn-danger" data-testid="button-confirm-delete">
+                    Yes, Delete
+                </button>
+                <a href="{% url 'expense_detail' expense.id %}" class="btn btn-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

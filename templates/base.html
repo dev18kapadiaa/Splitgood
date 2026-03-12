@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Splitgood{% endblock %}</title>
+    <meta name="description" content="Split expenses with friends and family easily. Track who owes who and settle up seamlessly.">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- CSS -->
+    <link rel="stylesheet" href="/static/css/styles.css">
+    
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    {% if user.is_authenticated %}
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="{% url 'dashboard' %}" class="nav-logo">
+                <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v12M6 12h12"/>
+                </svg>
+                <span>Splitgood</span>
+            </a>
+            
+            <div class="nav-links">
+                <a href="{% url 'dashboard' %}" class="nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}" data-testid="link-dashboard">
+                    Dashboard
+                </a>
+                <a href="{% url 'group_list' %}" class="nav-link {% if 'group' in request.resolver_match.url_name %}active{% endif %}" data-testid="link-groups">
+                    Groups
+                </a>
+                <a href="{% url 'activity_feed' %}" class="nav-link {% if request.resolver_match.url_name == 'activity_feed' %}active{% endif %}" data-testid="link-activity">
+                    Activity
+                </a>
+            </div>
+            
+            <div class="nav-user">
+                <a href="{% url 'profile' %}" data-testid="link-profile" title="{{ user.get_display_name }}">
+                    {% include 'core/includes/user_avatar.html' with user_obj=user avatar_class='user-avatar' size=40 %}
+                </a>
+                <a href="{% url 'logout' %}" class="nav-link logout-link" data-testid="link-logout">
+                    Logout
+                </a>
+            </div>
+        </div>
+    </nav>
+    {% endif %}
+    
+    <main class="main-content">
+        {% if messages %}
+        <div class="messages-container">
+            {% for message in messages %}
+            <div class="message message-{{ message.tags }}" data-testid="message-{{ message.tags }}">
+                {{ message }}
+                <button type="button" class="message-close" onclick="this.parentElement.remove()">&times;</button>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
+        {% block content %}{% endblock %}
+    </main>
+    
+    <script src="/static/js/main.js"></script>
+    <!-- include version to bust browser cache when file changes -->
+    <script src="/static/js/currency_toggle.js?v=20260227"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Phone - Splitgood</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v12M6 12h12"/>
+                </svg>
+                <h1>Almost there!</h1>
+                <p>We need your phone number to complete your account</p>
+            </div>
+
+            {% if oauth_email %}
+            <div style="background: var(--bg-secondary); padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem; text-align: center;">
+                <div style="font-size: 0.875rem; color: var(--text-secondary);">Signing up as</div>
+                <div style="font-weight: 600;">{{ oauth_name }}</div>
+                <div style="color: var(--text-secondary); font-size: 0.875rem;">{{ oauth_email }}</div>
+            </div>
+            {% endif %}
+
+            {% if messages %}
+            <div class="messages-container mb-4">
+                {% for message in messages %}
+                <div class="message message-{{ message.tags }}">
+                    {{ message }}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <form method="post">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label class="form-label">Phone Number</label>
+                    <div class="phone-input-group">
+                        {{ form.country_code }}
+                        {{ form.phone }}
+                    </div>
+                    {% if form.phone.errors %}
+                    <div class="form-error">{{ form.phone.errors.0 }}</div>
+                    {% endif %}
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-lg w-full" data-testid="button-oauth-send-otp">
+                    Send Verification Code
+                </button>
+            </form>
+
+            <div class="auth-footer">
+                <a href="{% url 'login' %}" data-testid="link-back-login">Back to sign in</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
