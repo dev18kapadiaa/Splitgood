@@ -12,6 +12,11 @@
     <div class="card-body">
         <form method="post" enctype="multipart/form-data">
             {% csrf_token %}
+            {{ form.contributions_json }}
+            {{ form.split_values_json }}
+            {% if form.non_field_errors %}
+            <div class="form-error" style="margin-bottom: 1rem;">{{ form.non_field_errors.0 }}</div>
+            {% endif %}
             
             <div class="form-group">
                 <label for="id_title" class="form-label">Description</label>
@@ -55,6 +60,37 @@
                     {{ form.split_type }}
                 </div>
             </div>
+
+            <div class="form-group">
+                <label class="form-label">Who Paid?</label>
+                <div class="participant-list">
+                    {% for member in members %}
+                    <div class="participant-item">
+                        <input type="checkbox"
+                               class="contributor-checkbox"
+                               id="contributor_{{ member.id }}"
+                               data-user-id="{{ member.id }}">
+                        {% include 'core/includes/user_avatar.html' with user_obj=member avatar_class='participant-avatar' size=36 font_size='0.8125rem' %}
+                        <div class="participant-info">
+                            <div class="participant-name">{{ member.get_display_name }}</div>
+                        </div>
+                        <div class="participant-amount" style="display:block; max-width: 170px;">
+                            <input type="number"
+                                   class="form-input contribution-amount"
+                                   step="0.01"
+                                   min="0"
+                                   value="0"
+                                   data-user-id="{{ member.id }}"
+                                   placeholder="0.00">
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div style="margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.875rem;">
+                    Contributions total: <span id="contribution-total">0.00</span>
+                    <span id="contribution-diff" class="unequal-diff"></span>
+                </div>
+            </div>
             
             <div class="form-group">
                 <label class="form-label">Split between</label>
@@ -75,7 +111,7 @@
                         <div class="participant-amount unequal-split-fields hidden">
                             <input type="number" 
                                    name="split_amount_{{ member.id }}" 
-                                   class="form-input split-amount"
+                                   class="form-input split-amount split-value-input"
                                    step="0.01"
                                    min="0"
                                    value="0"
@@ -126,24 +162,193 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const splitTypeSelect = document.getElementById('id_split_type');
+    const totalAmountInput = document.getElementById('id_total_amount');
+    const paidBySelect = document.getElementById('id_paid_by');
+    const contributionsField = document.getElementById('id_contributions_json');
+    const splitValuesField = document.getElementById('id_split_values_json');
+    const form = document.querySelector('form');
     const unequalFields = document.querySelectorAll('.unequal-split-fields');
-    
-    function toggleUnequalFields() {
-        const isUnequal = splitTypeSelect.value !== 'equal';
-        unequalFields.forEach(function(field) {
-            if (isUnequal) {
-                field.classList.remove('hidden');
-            } else {
-                field.classList.add('hidden');
+    const participantCheckboxes = Array.from(document.querySelectorAll('.participant-checkbox'));
+    const contributionCheckboxes = Array.from(document.querySelectorAll('.contributor-checkbox'));
+    const contributionInputs = Array.from(document.querySelectorAll('.contribution-amount'));
+    const splitInputs = Array.from(document.querySelectorAll('.split-value-input'));
+    const initialContributions = {{ initial_contributions_json|safe }};
+    const initialSplitValues = {{ initial_split_values_json|safe }};
+    const currencySelect = document.getElementById('id_currency');
+
+    function amountSymbol() {
+        const code = currencySelect ? currencySelect.value : 'USD';
+        return code + ' ';
+    }
+
+    function parseAmount(value) {
+        const num = parseFloat(value);
+        return Number.isFinite(num) ? num : 0;
+    }
+
+    function toMoney(value) {
+        return (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2);
+    }
+
+    function selectedParticipants() {
+        return participantCheckboxes.filter(cb => cb.checked).map(cb => cb.value);
+    }
+
+    function selectedContributions() {
+        const rows = [];
+        contributionCheckboxes.forEach((cb) => {
+            if (!cb.checked) return;
+            const input = document.querySelector('.contribution-amount[data-user-id="' + cb.dataset.userId + '"]');
+            const amount = parseAmount(input ? input.value : 0);
+            if (amount > 0) {
+                rows.push({ user: cb.dataset.userId, amount: toMoney(amount) });
             }
         });
-        if (isUnequal) {
-            calculateEqualShares();
+        return rows;
+    }
+
+    function selectedSplitValues() {
+        const rows = [];
+        const ids = new Set(selectedParticipants());
+        splitInputs.forEach((input) => {
+            const uid = input.dataset.userId;
+            if (!ids.has(uid)) return;
+            const amount = parseAmount(input.value);
+            rows.push({ user: uid, amount: toMoney(amount) });
+        });
+        return rows;
+    }
+
+    function updateContributionSummary() {
+        const total = parseAmount(totalAmountInput.value);
+        const sum = selectedContributions().reduce((acc, item) => acc + parseAmount(item.amount), 0);
+        const diff = Math.round((sum - total) * 100) / 100;
+        document.getElementById('contribution-total').textContent = amountSymbol() + toMoney(sum);
+        const diffEl = document.getElementById('contribution-diff');
+        if (Math.abs(diff) < 0.01) {
+            diffEl.textContent = '';
+            diffEl.className = 'unequal-diff';
+        } else if (diff > 0) {
+            diffEl.textContent = '(' + amountSymbol() + toMoney(Math.abs(diff)) + ' over)';
+            diffEl.className = 'unequal-diff balance-negative';
+        } else {
+            diffEl.textContent = '(' + amountSymbol() + toMoney(Math.abs(diff)) + ' remaining)';
+            diffEl.className = 'unequal-diff balance-negative';
         }
     }
+
+    function updateEqualPreview() {
+        const selected = selectedParticipants();
+        const total = parseAmount(totalAmountInput.value);
+        const shareDisplay = document.querySelector('.equal-share-display');
+        if (!shareDisplay) return;
+        if (!selected.length) {
+            shareDisplay.textContent = '';
+            return;
+        }
+        if (splitTypeSelect.value === 'equal') {
+            shareDisplay.textContent = 'Each selected participant owes ' + amountSymbol() + toMoney(total / selected.length);
+        } else if (splitTypeSelect.value === 'percentage') {
+            shareDisplay.textContent = 'Enter percentages for selected participants (must total 100).';
+        } else {
+            shareDisplay.textContent = 'Enter manual amounts for selected participants.';
+        }
+    }
+
+    function toggleUnequalFields() {
+        const splitType = splitTypeSelect.value;
+        const isEqual = splitType === 'equal';
+
+        // Show/hide each participant's split input based on split type AND checked state
+        participantCheckboxes.forEach((cb) => {
+            const item = cb.closest('.participant-item');
+            if (!item) return;
+            const splitDiv = item.querySelector('.unequal-split-fields');
+            if (splitDiv) {
+                splitDiv.classList.toggle('hidden', isEqual || !cb.checked);
+            }
+        });
+
+        // Show/hide the summary total row (not the per-participant divs)
+        unequalFields.forEach((field) => {
+            if (!field.closest('.participant-item')) {
+                field.classList.toggle('hidden', isEqual);
+            }
+        });
+
+        splitInputs.forEach((input) => {
+            input.placeholder = splitType === 'percentage' ? '0.00 %' : '0.00';
+        });
+    }
+
+    function hydrateInitialValues() {
+        if (Array.isArray(initialContributions) && initialContributions.length) {
+            initialContributions.forEach((item) => {
+                const uid = String(item.user);
+                const cb = document.getElementById('contributor_' + uid);
+                const input = document.querySelector('.contribution-amount[data-user-id="' + uid + '"]');
+                if (cb) cb.checked = true;
+                if (input) input.value = toMoney(parseAmount(item.amount));
+            });
+        } else {
+            const payerId = paidBySelect ? paidBySelect.value : null;
+            const payerCb = payerId ? document.getElementById('contributor_' + payerId) : null;
+            const payerInput = payerId ? document.querySelector('.contribution-amount[data-user-id="' + payerId + '"]') : null;
+            if (payerCb) payerCb.checked = true;
+            if (payerInput) payerInput.value = toMoney(parseAmount(totalAmountInput.value));
+        }
+
+        if (Array.isArray(initialSplitValues) && initialSplitValues.length) {
+            initialSplitValues.forEach((item) => {
+                const uid = String(item.user);
+                const input = document.querySelector('.split-value-input[data-user-id="' + uid + '"]');
+                if (input) input.value = toMoney(parseAmount(item.amount));
+            });
+        }
+    }
+
+    function syncHiddenFields() {
+        contributionsField.value = JSON.stringify(selectedContributions());
+        if (splitTypeSelect.value === 'equal') {
+            splitValuesField.value = '[]';
+        } else {
+            splitValuesField.value = JSON.stringify(selectedSplitValues());
+        }
+    }
+
+    function onInputsChanged() {
+        toggleUnequalFields();
+        updateContributionSummary();
+        updateEqualPreview();
+        syncHiddenFields();
+    }
     
-    splitTypeSelect.addEventListener('change', toggleUnequalFields);
-    toggleUnequalFields();
+    splitTypeSelect.addEventListener('change', onInputsChanged);
+    totalAmountInput.addEventListener('input', onInputsChanged);
+    contributionCheckboxes.forEach((cb) => cb.addEventListener('change', onInputsChanged));
+    contributionInputs.forEach((input) => input.addEventListener('input', onInputsChanged));
+    participantCheckboxes.forEach((cb) => cb.addEventListener('change', onInputsChanged));
+    splitInputs.forEach((input) => input.addEventListener('input', onInputsChanged));
+
+    if (paidBySelect) {
+        paidBySelect.addEventListener('change', function() {
+            if (initialContributions.length) return;
+            contributionCheckboxes.forEach((cb) => {
+                cb.checked = cb.dataset.userId === paidBySelect.value;
+            });
+            contributionInputs.forEach((input) => {
+                input.value = input.dataset.userId === paidBySelect.value ? toMoney(parseAmount(totalAmountInput.value)) : '0.00';
+            });
+            onInputsChanged();
+        });
+    }
+
+    form.addEventListener('submit', function() {
+        syncHiddenFields();
+    });
+
+    hydrateInitialValues();
+    onInputsChanged();
 });
 </script>
 {% endblock %}

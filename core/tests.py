@@ -4,7 +4,8 @@ import json
 from decimal import Decimal
 
 from core.fx_service import fetch_fx_rates, compute_unified_balance
-from core.models import User, Group, GroupMembership, Expense, ExpenseShare, PersonIdentity
+from core.models import User, Group, GroupMembership, Expense, ExpenseShare, ExpenseContribution, PersonIdentity
+from core.views import calculate_group_balance, calculate_group_balance_matrix
 
 # Create your tests here.
 
@@ -118,9 +119,9 @@ class GroupDetailViewTests(TestCase):
         self.assertEqual(entry['balances']['USD'], Decimal('10'))
         self.assertTrue(entry['net_positive'])  # user3 owes user1
 
-        # channel split must remain separate in dashboard data
-        self.assertEqual(entry['owed_to_user'], {'USD': Decimal('53.00')})
-        self.assertEqual(entry['owed_by_user'], {'USD': Decimal('43.00')})
+        # same-currency opposite directions are netted in dashboard data
+        self.assertEqual(entry['owed_to_user'], {'USD': Decimal('10.00')})
+        self.assertEqual(entry['owed_by_user'], {})
         
         # Should not have 'group' key (it's aggregated)
         self.assertNotIn('group', entry)
@@ -258,6 +259,34 @@ class DashboardBilateralRuleTests(TestCase):
         you_owe_inr = 13.0 / rates['USD'] * rates['INR']
         self.assertGreater(owed_you_inr, 0)
         self.assertGreater(you_owe_inr, 0)
+
+    def test_3b_same_currency_netted_different_currency_separate(self):
+        g1 = self._group('Trip', [self.me, self.a])
+        g2 = self._group('Dinner', [self.me, self.a])
+        g3 = self._group('Online', [self.me, self.a])
+
+        # AED: friend owes me 20
+        e1 = Expense.objects.create(group=g1, created_by=self.me, paid_by=self.me, title='aed1', total_amount=20, currency='AED')
+        ExpenseShare.objects.create(expense=e1, user=self.a, amount_owed=20)
+
+        # AED: I owe friend 40
+        e2 = Expense.objects.create(group=g2, created_by=self.a, paid_by=self.a, title='aed2', total_amount=40, currency='AED')
+        ExpenseShare.objects.create(expense=e2, user=self.me, amount_owed=40)
+
+        # USD: I owe friend 5
+        e3 = Expense.objects.create(group=g3, created_by=self.a, paid_by=self.a, title='usd1', total_amount=5, currency='USD')
+        ExpenseShare.objects.create(expense=e3, user=self.me, amount_owed=5)
+
+        balances, total = self._dashboard_balances()
+        self.assertEqual(len(balances), 1)
+        entry = balances[0]
+
+        # AED net = 20 - 40 = -20 (I owe)
+        # USD remains separate = -5 (I owe)
+        self.assertEqual(entry['balances'], {'AED': Decimal('-20.00'), 'USD': Decimal('-5.00')})
+        self.assertEqual(entry['owed_to_user'], {})
+        self.assertEqual(entry['owed_by_user'], {'AED': Decimal('20.00'), 'USD': Decimal('5.00')})
+        self.assertEqual(total, {'AED': Decimal('-20.00'), 'USD': Decimal('-5.00')})
 
     def test_4_friend_only_you_owe(self):
         group = self._group('G1', [self.me, self.a])
@@ -469,3 +498,182 @@ class DashboardBilateralRuleTests(TestCase):
         self.assertEqual(entry['balances'], {'USD': Decimal('-20')})
         self.assertEqual(entry['owed_by_user'], {'USD': Decimal('20')})
         self.assertEqual(entry['owed_to_user'], {})
+
+
+class MultiPayerSplitTests(TestCase):
+    def setUp(self):
+        self.rahul = User.objects.create_user('rahul', 'rahul@example.com', 'pass')
+        self.priya = User.objects.create_user('priya', 'priya@example.com', 'pass')
+        self.dev = User.objects.create_user('dev', 'dev@example.com', 'pass')
+        self.aman = User.objects.create_user('aman', 'aman@example.com', 'pass')
+        self.group = Group.objects.create(name='Trip', owner=self.rahul, default_currency='USD')
+        for member in (self.rahul, self.priya, self.dev, self.aman):
+            GroupMembership.objects.create(user=member, group=self.group, status='accepted', role='member')
+
+    def test_equal_split_with_external_contributor(self):
+        expense = Expense.objects.create(
+            group=self.group,
+            created_by=self.rahul,
+            paid_by=self.rahul,
+            title='Dinner',
+            total_amount=Decimal('3000.00'),
+            currency='USD',
+            split_type='equal',
+        )
+        ExpenseShare.objects.create(expense=expense, user=self.rahul, amount_owed=Decimal('1000.00'))
+        ExpenseShare.objects.create(expense=expense, user=self.priya, amount_owed=Decimal('1000.00'))
+        ExpenseShare.objects.create(expense=expense, user=self.dev, amount_owed=Decimal('1000.00'))
+
+        ExpenseContribution.objects.create(expense=expense, user=self.rahul, amount_paid=Decimal('1000.00'))
+        ExpenseContribution.objects.create(expense=expense, user=self.priya, amount_paid=Decimal('1000.00'))
+        ExpenseContribution.objects.create(expense=expense, user=self.aman, amount_paid=Decimal('1000.00'))
+
+        self.assertEqual(calculate_group_balance(self.rahul, self.group), {})
+        self.assertEqual(calculate_group_balance(self.priya, self.group), {})
+        self.assertEqual(calculate_group_balance(self.dev, self.group), {'USD': Decimal('-1000.00')})
+        self.assertEqual(calculate_group_balance(self.aman, self.group), {'USD': Decimal('1000.00')})
+
+        matrix = calculate_group_balance_matrix(self.group)
+        self.assertEqual(len(matrix), 1)
+        self.assertEqual(matrix[0]['from_user'].id, self.dev.id)
+        self.assertEqual(matrix[0]['to_user'].id, self.aman.id)
+        self.assertEqual(matrix[0]['amount'], Decimal('1000.00'))
+
+    def test_unequal_split_with_external_contributor(self):
+        expense = Expense.objects.create(
+            group=self.group,
+            created_by=self.rahul,
+            paid_by=self.aman,
+            title='Trip Food',
+            total_amount=Decimal('3000.00'),
+            currency='USD',
+            split_type='unequal',
+        )
+        ExpenseShare.objects.create(expense=expense, user=self.rahul, amount_owed=Decimal('500.00'))
+        ExpenseShare.objects.create(expense=expense, user=self.priya, amount_owed=Decimal('1000.00'))
+        ExpenseShare.objects.create(expense=expense, user=self.dev, amount_owed=Decimal('1500.00'))
+
+        ExpenseContribution.objects.create(expense=expense, user=self.rahul, amount_paid=Decimal('500.00'))
+        ExpenseContribution.objects.create(expense=expense, user=self.aman, amount_paid=Decimal('2500.00'))
+
+        self.assertEqual(calculate_group_balance(self.rahul, self.group), {})
+        self.assertEqual(calculate_group_balance(self.priya, self.group), {'USD': Decimal('-1000.00')})
+        self.assertEqual(calculate_group_balance(self.dev, self.group), {'USD': Decimal('-1500.00')})
+        self.assertEqual(calculate_group_balance(self.aman, self.group), {'USD': Decimal('2500.00')})
+
+        matrix = calculate_group_balance_matrix(self.group)
+        edges = {(item['from_user'].id, item['to_user'].id): item['amount'] for item in matrix}
+        self.assertEqual(edges[(self.priya.id, self.aman.id)], Decimal('1000.00'))
+        self.assertEqual(edges[(self.dev.id, self.aman.id)], Decimal('1500.00'))
+
+    def test_percentage_split_with_external_contributor(self):
+        expense = Expense.objects.create(
+            group=self.group,
+            created_by=self.rahul,
+            paid_by=self.aman,
+            title='Hotel Booking',
+            total_amount=Decimal('4000.00'),
+            currency='INR',
+            split_type='percentage',
+        )
+        ExpenseShare.objects.create(expense=expense, user=self.rahul, amount_owed=Decimal('1000.00'), share_percentage=Decimal('25.00'))
+        ExpenseShare.objects.create(expense=expense, user=self.priya, amount_owed=Decimal('1000.00'), share_percentage=Decimal('25.00'))
+        ExpenseShare.objects.create(expense=expense, user=self.dev, amount_owed=Decimal('2000.00'), share_percentage=Decimal('50.00'))
+
+        ExpenseContribution.objects.create(expense=expense, user=self.aman, amount_paid=Decimal('4000.00'))
+
+        self.assertEqual(calculate_group_balance(self.rahul, self.group), {'INR': Decimal('-1000.00')})
+        self.assertEqual(calculate_group_balance(self.priya, self.group), {'INR': Decimal('-1000.00')})
+        self.assertEqual(calculate_group_balance(self.dev, self.group), {'INR': Decimal('-2000.00')})
+        self.assertEqual(calculate_group_balance(self.aman, self.group), {'INR': Decimal('4000.00')})
+
+        matrix = calculate_group_balance_matrix(self.group)
+        edges = {(item['from_user'].id, item['to_user'].id): item['amount'] for item in matrix}
+        self.assertEqual(edges[(self.rahul.id, self.aman.id)], Decimal('1000.00'))
+        self.assertEqual(edges[(self.priya.id, self.aman.id)], Decimal('1000.00'))
+        self.assertEqual(edges[(self.dev.id, self.aman.id)], Decimal('2000.00'))
+
+
+class MinimumPaymentSimplificationTests(TestCase):
+    def setUp(self):
+        self.dev = User.objects.create_user('devmin', 'devmin@example.com', 'pass')
+        self.sejal = User.objects.create_user('sejalmin', 'sejalmin@example.com', 'pass')
+        self.rahul = User.objects.create_user('rahulmin', 'rahulmin@example.com', 'pass')
+        self.group = Group.objects.create(name='MinPay', owner=self.dev, default_currency='AED')
+        for member in (self.dev, self.sejal, self.rahul):
+            GroupMembership.objects.create(user=member, group=self.group, status='accepted', role='member')
+
+    def _expense(self, payer, borrower, amount, currency='AED', title='expense'):
+        exp = Expense.objects.create(
+            group=self.group,
+            created_by=payer,
+            paid_by=payer,
+            title=title,
+            total_amount=Decimal(str(amount)),
+            currency=currency,
+            split_type='unequal',
+        )
+        ExpenseShare.objects.create(expense=exp, user=borrower, amount_owed=Decimal(str(amount)))
+        return exp
+
+    def test_direct_circular_redundancy_cancels(self):
+        # Dev -> Sejal 20 and Sejal -> Dev 20 => settled
+        self._expense(self.sejal, self.dev, '20.00', 'AED', 's1')
+        self._expense(self.dev, self.sejal, '20.00', 'AED', 's2')
+
+        matrix = calculate_group_balance_matrix(self.group)
+        self.assertEqual(matrix, [])
+
+    def test_partial_netting_same_currency(self):
+        # Dev -> Sejal 50 and Sejal -> Dev 20 => Dev -> Sejal 30
+        self._expense(self.sejal, self.dev, '50.00', 'AED', 's1')
+        self._expense(self.dev, self.sejal, '20.00', 'AED', 's2')
+
+        matrix = calculate_group_balance_matrix(self.group)
+        self.assertEqual(len(matrix), 1)
+        row = matrix[0]
+        self.assertEqual(row['from_user'].id, self.dev.id)
+        self.assertEqual(row['to_user'].id, self.sejal.id)
+        self.assertEqual(row['currency'], 'AED')
+        self.assertEqual(row['amount'], Decimal('30.00'))
+
+    def test_three_way_cycle_cancels(self):
+        # Dev -> Sejal 20, Sejal -> Rahul 20, Rahul -> Dev 20 => settled
+        self._expense(self.sejal, self.dev, '20.00', 'AED', 's1')
+        self._expense(self.rahul, self.sejal, '20.00', 'AED', 's2')
+        self._expense(self.dev, self.rahul, '20.00', 'AED', 's3')
+
+        matrix = calculate_group_balance_matrix(self.group)
+        self.assertEqual(matrix, [])
+
+    def test_realistic_cycle_reduces_to_minimum(self):
+        # Dev -> Sejal 50, Rahul -> Dev 20, Sejal -> Rahul 20 => Dev -> Sejal 30
+        self._expense(self.sejal, self.dev, '50.00', 'AED', 's1')
+        self._expense(self.dev, self.rahul, '20.00', 'AED', 's2')
+        self._expense(self.rahul, self.sejal, '20.00', 'AED', 's3')
+
+        matrix = calculate_group_balance_matrix(self.group)
+        self.assertEqual(len(matrix), 1)
+        row = matrix[0]
+        self.assertEqual(row['from_user'].id, self.dev.id)
+        self.assertEqual(row['to_user'].id, self.sejal.id)
+        self.assertEqual(row['currency'], 'AED')
+        self.assertEqual(row['amount'], Decimal('30.00'))
+
+    def test_currency_isolation_no_cross_currency_netting(self):
+        # AED and USD must remain isolated
+        self._expense(self.sejal, self.dev, '40.00', 'AED', 'aed1')   # Dev owes Sejal 40 AED
+        self._expense(self.dev, self.sejal, '10.00', 'AED', 'aed2')   # Sejal owes Dev 10 AED => net Dev owes Sejal 30 AED
+        self._expense(self.sejal, self.dev, '5.00', 'USD', 'usd1')    # Dev owes Sejal 5 USD
+
+        matrix = calculate_group_balance_matrix(self.group)
+        self.assertEqual(len(matrix), 2)
+
+        by_currency = {row['currency']: row for row in matrix}
+        self.assertEqual(by_currency['AED']['from_user'].id, self.dev.id)
+        self.assertEqual(by_currency['AED']['to_user'].id, self.sejal.id)
+        self.assertEqual(by_currency['AED']['amount'], Decimal('30.00'))
+
+        self.assertEqual(by_currency['USD']['from_user'].id, self.dev.id)
+        self.assertEqual(by_currency['USD']['to_user'].id, self.sejal.id)
+        self.assertEqual(by_currency['USD']['amount'], Decimal('5.00'))

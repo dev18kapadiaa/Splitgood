@@ -4,6 +4,8 @@ from django.contrib.auth import get_user_model
 from .models import Group, Expense, ExpenseShare, Payment, Comment
 from .currencies import CURRENCY_CHOICES
 from decimal import Decimal
+from decimal import InvalidOperation
+import json
 
 User = get_user_model()
 
@@ -238,6 +240,8 @@ class ExpenseForm(forms.ModelForm):
         widget=forms.CheckboxSelectMultiple(attrs={'class': 'participant-checkbox'}),
         required=True
     )
+    contributions_json = forms.CharField(required=False, widget=forms.HiddenInput())
+    split_values_json = forms.CharField(required=False, widget=forms.HiddenInput())
 
     class Meta:
         model = Expense
@@ -270,6 +274,7 @@ class ExpenseForm(forms.ModelForm):
 
     def __init__(self, group=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.group = group
         if group:
             members = group.get_members()
             self.fields['paid_by'] = DisplayNameModelChoiceField(
@@ -280,6 +285,132 @@ class ExpenseForm(forms.ModelForm):
             self.fields['participants'].initial = members
             if not self.instance.pk:
                 self.initial['currency'] = group.default_currency
+
+    def _parse_entries(self, raw_text):
+        if not raw_text:
+            return []
+        if isinstance(raw_text, list):
+            return raw_text
+        try:
+            value = json.loads(raw_text)
+        except (TypeError, ValueError):
+            raise forms.ValidationError('Invalid structured payload for split details.')
+        if not isinstance(value, list):
+            raise forms.ValidationError('Structured split payload must be a list.')
+        return value
+
+    def clean(self):
+        cleaned = super().clean()
+        total_amount = cleaned.get('total_amount')
+        split_type = cleaned.get('split_type')
+        participants = cleaned.get('participants')
+        paid_by = cleaned.get('paid_by')
+
+        if not total_amount or not participants:
+            return cleaned
+
+        participant_ids = {str(u.id) for u in participants}
+        group_members = set()
+        if self.group:
+            group_members = {str(u.id) for u in self.group.get_members()}
+
+        raw_contributions = cleaned.get('contributions_json') or self.data.get('contributions_json', '')
+        contribution_entries = self._parse_entries(raw_contributions)
+        contributions = []
+
+        if not contribution_entries:
+            # Backward compatible fallback: single payer covers full amount.
+            contributions = [{'user': paid_by, 'amount': total_amount.quantize(Decimal('0.01'))}]
+        else:
+            seen_users = set()
+            total_contributed = Decimal('0')
+            for item in contribution_entries:
+                if not isinstance(item, dict):
+                    raise forms.ValidationError('Each contribution entry must be an object.')
+                user_id = str(item.get('user', '')).strip()
+                amount_raw = item.get('amount', '0')
+                try:
+                    amount = Decimal(str(amount_raw)).quantize(Decimal('0.01'))
+                except (InvalidOperation, ValueError):
+                    raise forms.ValidationError('Contribution amounts must be valid decimals.')
+                if amount <= 0:
+                    raise forms.ValidationError('Contribution amounts must be greater than zero.')
+                if user_id in seen_users:
+                    raise forms.ValidationError('Contributors must be unique.')
+                seen_users.add(user_id)
+                if self.group and user_id not in group_members:
+                    raise forms.ValidationError('All contributors must be group members.')
+                user = User.objects.filter(id=user_id).first()
+                if not user:
+                    raise forms.ValidationError('Contribution user not found.')
+                contributions.append({'user': user, 'amount': amount})
+                total_contributed += amount
+
+            if total_contributed != total_amount:
+                raise forms.ValidationError('Sum of contributions must equal total expense amount.')
+
+        split_entries_raw = cleaned.get('split_values_json') or self.data.get('split_values_json', '')
+        split_entries = self._parse_entries(split_entries_raw)
+        split_amounts = {}
+        split_percentages = {}
+
+        if split_type == 'equal':
+            if len(participants) == 0:
+                raise forms.ValidationError('At least one participant is required for equal split.')
+        elif split_type == 'unequal':
+            if split_entries:
+                source_entries = split_entries
+            else:
+                source_entries = []
+                for user in participants:
+                    source_entries.append({'user': str(user.id), 'amount': self.data.get(f'split_amount_{user.id}', '0')})
+
+            sum_shares = Decimal('0')
+            for item in source_entries:
+                user_id = str(item.get('user', '')).strip()
+                if user_id not in participant_ids:
+                    continue
+                try:
+                    amount = Decimal(str(item.get('amount', '0'))).quantize(Decimal('0.01'))
+                except (InvalidOperation, ValueError):
+                    raise forms.ValidationError('Unequal split amounts must be valid decimals.')
+                if amount < 0:
+                    raise forms.ValidationError('Unequal split amounts cannot be negative.')
+                split_amounts[user_id] = amount
+                sum_shares += amount
+
+            for participant in participants:
+                split_amounts.setdefault(str(participant.id), Decimal('0'))
+            if sum_shares != total_amount:
+                raise forms.ValidationError('Sum of unequal shares must equal total expense amount.')
+
+        elif split_type == 'percentage':
+            if not split_entries:
+                raise forms.ValidationError('Percentage split requires percentage values for participants.')
+
+            sum_percentages = Decimal('0')
+            for item in split_entries:
+                user_id = str(item.get('user', '')).strip()
+                if user_id not in participant_ids:
+                    continue
+                try:
+                    percent = Decimal(str(item.get('amount', '0'))).quantize(Decimal('0.01'))
+                except (InvalidOperation, ValueError):
+                    raise forms.ValidationError('Percentage values must be valid decimals.')
+                if percent < 0:
+                    raise forms.ValidationError('Percentage values cannot be negative.')
+                split_percentages[user_id] = percent
+                sum_percentages += percent
+
+            if set(split_percentages.keys()) != participant_ids:
+                raise forms.ValidationError('Provide percentage for every selected participant.')
+            if sum_percentages != Decimal('100.00'):
+                raise forms.ValidationError('Sum of percentages must be exactly 100.')
+
+        cleaned['parsed_contributions'] = contributions
+        cleaned['parsed_split_amounts'] = split_amounts
+        cleaned['parsed_split_percentages'] = split_percentages
+        return cleaned
 
 
 class UnequalSplitForm(forms.Form):

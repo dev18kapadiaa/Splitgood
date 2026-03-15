@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.core.files.base import ContentFile
+from django.http import QueryDict
 from decimal import Decimal
 from collections import defaultdict
 import uuid
@@ -23,7 +24,7 @@ from cloudinary import uploader
 
 from .models import (
     Group, GroupMembership, Expense, ExpenseShare,
-    Payment, Comment, Activity, GroupInvite,
+    ExpenseContribution, Payment, Comment, Activity, GroupInvite,
     PersonIdentity, PhoneOTP, Profile
 )
 from .forms import (
@@ -575,6 +576,7 @@ def _link_person_identities_for_user(user):
             placeholder = identity.placeholder_user
             with transaction.atomic():
                 ExpenseShare.objects.filter(user=placeholder).update(user=user)
+                ExpenseContribution.objects.filter(user=placeholder).update(user=user)
                 Payment.objects.filter(from_user=placeholder).update(from_user=user)
                 Payment.objects.filter(to_user=placeholder).update(to_user=user)
                 Expense.objects.filter(paid_by=placeholder).update(paid_by=user)
@@ -880,7 +882,7 @@ def group_detail(request, group_id):
             'identity': m.person_identity,
         })
 
-    expenses_qs = group.expenses.select_related('paid_by', 'created_by').prefetch_related('shares__user').order_by('-date', '-created_at')
+    expenses_qs = group.expenses.select_related('paid_by', 'created_by').prefetch_related('shares__user', 'contributions__user').order_by('-date', '-created_at')
     payments_qs = group.payments.select_related('from_user', 'to_user').order_by('-date', '-created_at')
 
     # Paginate expenses and payments (10 per page)
@@ -896,6 +898,23 @@ def group_detail(request, group_id):
         expenses_page = expenses_paginator.page(1)
     except EmptyPage:
         expenses_page = expenses_paginator.page(expenses_paginator.num_pages)
+
+    for expense in expenses_page.object_list:
+        paid_amount = Decimal('0')
+        for c in expense.get_contributions():
+            if c.user_id == request.user.id:
+                paid_amount += c.amount_paid
+        share_amount = Decimal('0')
+        for s in expense.shares.all():
+            if s.user_id == request.user.id:
+                share_amount += s.amount_owed
+        expense.current_user_net = paid_amount - share_amount
+
+        contribution_rows = expense.get_contributions()
+        if len(contribution_rows) == 1:
+            expense.payer_display_name = contribution_rows[0].user.get_display_name()
+        else:
+            expense.payer_display_name = ', '.join(c.user.get_display_name() for c in contribution_rows)
 
     try:
         payments_page = payments_paginator.page(payments_page_number)
@@ -1140,43 +1159,33 @@ def expense_create(request, group_id):
     members = list(group.get_members())
 
     if request.method == 'POST':
-        form = ExpenseForm(group=group, data=request.POST, files=request.FILES)
+        form_data = _build_expense_form_data(request)
+        form = ExpenseForm(group=group, data=form_data, files=request.FILES)
         if form.is_valid():
             with transaction.atomic():
                 expense = form.save(commit=False)
                 expense.group = group
                 expense.created_by = request.user
+                contributions = form.cleaned_data.get('parsed_contributions', [])
+                if contributions:
+                    expense.paid_by = max(contributions, key=lambda x: x['amount'])['user']
                 expense.save()
 
-                participants = form.cleaned_data['participants']
-                split_type = expense.split_type
-                total_amount = expense.total_amount
+                _save_expense_contributions(
+                    expense,
+                    contributions,
+                    expense.total_amount,
+                    expense.paid_by,
+                )
 
-                if split_type == 'equal':
-                    share_amount = total_amount / len(participants)
-                    for user in participants:
-                        ExpenseShare.objects.create(
-                            expense=expense,
-                            user=user,
-                            amount_owed=share_amount.quantize(Decimal('0.01')),
-                            is_paid=(user == expense.paid_by)
-                        )
-                else:
-                    for user in participants:
-                        amount_key = f'split_amount_{user.id}'
-                        amount = request.POST.get(amount_key, '0')
-                        try:
-                            amount = Decimal(amount)
-                        except:
-                            amount = Decimal('0')
-
-                        if amount > 0:
-                            ExpenseShare.objects.create(
-                                expense=expense,
-                                user=user,
-                                amount_owed=amount,
-                                is_paid=(user == expense.paid_by)
-                            )
+                _save_expense_shares(
+                    expense=expense,
+                    participants=list(form.cleaned_data['participants']),
+                    split_type=expense.split_type,
+                    total_amount=expense.total_amount,
+                    split_amounts=form.cleaned_data.get('parsed_split_amounts', {}),
+                    split_percentages=form.cleaned_data.get('parsed_split_percentages', {}),
+                )
 
                 Activity.objects.create(
                     user=request.user,
@@ -1201,10 +1210,15 @@ def expense_create(request, group_id):
             'split_type': group.default_split_type,
         })
 
+    initial_contributions_json = form.data.get('contributions_json', '[]') if request.method == 'POST' else '[]'
+    initial_split_values_json = form.data.get('split_values_json', '[]') if request.method == 'POST' else '[]'
+
     context = {
         'form': form,
         'group': group,
         'members': members,
+        'initial_contributions_json': initial_contributions_json,
+        'initial_split_values_json': initial_split_values_json,
     }
     return render(request, 'core/expense_form.html', context)
 
@@ -1213,7 +1227,7 @@ def expense_create(request, group_id):
 def expense_detail(request, expense_id):
     expense = get_object_or_404(
         Expense.objects.select_related('group', 'paid_by', 'created_by')
-        .prefetch_related('shares__user', 'comments__user'),
+        .prefetch_related('shares__user', 'contributions__user', 'comments__user'),
         id=expense_id
     )
 
@@ -1246,9 +1260,35 @@ def expense_detail(request, expense_id):
     else:
         comment_form = CommentForm()
 
+    paid_map = defaultdict(lambda: Decimal('0'))
+    for c in expense.get_contributions():
+        paid_map[c.user] += c.amount_paid
+
+    share_map = defaultdict(lambda: Decimal('0'))
+    for s in expense.shares.select_related('user').all():
+        share_map[s.user] += s.amount_owed
+
+    users = list({*paid_map.keys(), *share_map.keys()})
+    users.sort(key=lambda u: u.get_display_name().lower())
+    participant_rows = []
+    for u in users:
+        paid = paid_map.get(u, Decimal('0'))
+        share = share_map.get(u, Decimal('0'))
+        participant_rows.append({
+            'user': u,
+            'paid': paid,
+            'share': share,
+            'balance': paid - share,
+        })
+
+    contributions = expense.get_contributions()
+
     context = {
         'expense': expense,
         'shares': expense.shares.select_related('user'),
+        'participant_rows': participant_rows,
+        'contributions': contributions,
+        'primary_payer': expense.get_primary_payer(),
         'comments': expense.comments.filter(parent__isnull=True).select_related('user'),
         'comment_form': comment_form,
     }
@@ -1269,41 +1309,34 @@ def expense_edit(request, expense_id):
     members = list(group.get_members()) if group else []
 
     if request.method == 'POST':
-        form = ExpenseForm(group=group, data=request.POST, files=request.FILES, instance=expense)
+        form_data = _build_expense_form_data(request)
+        form = ExpenseForm(group=group, data=form_data, files=request.FILES, instance=expense)
         if form.is_valid():
             with transaction.atomic():
-                expense = form.save()
+                expense = form.save(commit=False)
+                contributions = form.cleaned_data.get('parsed_contributions', [])
+                if contributions:
+                    expense.paid_by = max(contributions, key=lambda x: x['amount'])['user']
+                expense.save()
 
                 expense.shares.all().delete()
-                participants = form.cleaned_data['participants']
-                split_type = expense.split_type
-                total_amount = expense.total_amount
+                expense.contributions.all().delete()
 
-                if split_type == 'equal':
-                    share_amount = total_amount / len(participants)
-                    for user in participants:
-                        ExpenseShare.objects.create(
-                            expense=expense,
-                            user=user,
-                            amount_owed=share_amount.quantize(Decimal('0.01')),
-                            is_paid=(user == expense.paid_by)
-                        )
-                else:
-                    for user in participants:
-                        amount_key = f'split_amount_{user.id}'
-                        amount = request.POST.get(amount_key, '0')
-                        try:
-                            amount = Decimal(amount)
-                        except:
-                            amount = Decimal('0')
+                _save_expense_contributions(
+                    expense,
+                    contributions,
+                    expense.total_amount,
+                    expense.paid_by,
+                )
 
-                        if amount > 0:
-                            ExpenseShare.objects.create(
-                                expense=expense,
-                                user=user,
-                                amount_owed=amount,
-                                is_paid=(user == expense.paid_by)
-                            )
+                _save_expense_shares(
+                    expense=expense,
+                    participants=list(form.cleaned_data['participants']),
+                    split_type=expense.split_type,
+                    total_amount=expense.total_amount,
+                    split_amounts=form.cleaned_data.get('parsed_split_amounts', {}),
+                    split_percentages=form.cleaned_data.get('parsed_split_percentages', {}),
+                )
 
                 Activity.objects.create(
                     user=request.user,
@@ -1317,9 +1350,28 @@ def expense_edit(request, expense_id):
                 return redirect('expense_detail', expense_id=expense_id)
     else:
         initial_participants = [s.user for s in expense.shares.all()]
+        initial_contributions = [
+            {'user': str(c.user_id), 'amount': str(c.amount_paid)}
+            for c in expense.get_contributions()
+        ]
+        if expense.split_type == 'percentage':
+            initial_split_values = [
+                {'user': str(s.user_id), 'amount': str(s.share_percentage or Decimal('0'))}
+                for s in expense.shares.all()
+            ]
+        else:
+            initial_split_values = [
+                {'user': str(s.user_id), 'amount': str(s.amount_owed)}
+                for s in expense.shares.all()
+            ]
         form = ExpenseForm(group=group, instance=expense, initial={
-            'participants': initial_participants
+            'participants': initial_participants,
+            'contributions_json': json.dumps(initial_contributions),
+            'split_values_json': json.dumps(initial_split_values),
         })
+
+    initial_contrib_context = form.data.get('contributions_json', '[]') if request.method == 'POST' else json.dumps(initial_contributions)
+    initial_split_context = form.data.get('split_values_json', '[]') if request.method == 'POST' else json.dumps(initial_split_values)
 
     context = {
         'form': form,
@@ -1327,6 +1379,8 @@ def expense_edit(request, expense_id):
         'group': group,
         'members': members,
         'is_edit': True,
+        'initial_contributions_json': initial_contrib_context,
+        'initial_split_values_json': initial_split_context,
     }
     return render(request, 'core/expense_form.html', context)
 
@@ -1474,23 +1528,36 @@ def calculate_group_balance(user, group):
     """
     balances = defaultdict(lambda: Decimal('0'))
 
-    owed_to_user = ExpenseShare.objects.filter(
-        expense__group=group,
-        expense__paid_by=user,
-    ).exclude(user=user).values('expense__currency').annotate(
-        total=Sum('amount_owed')
+    expenses = (
+        Expense.objects.filter(group=group)
+        .prefetch_related('shares__user', 'contributions__user')
     )
-    for row in owed_to_user:
-        balances[row['expense__currency']] += row['total']
+    for expense in expenses:
+        contributions = expense.get_contributions()
+        paid = Decimal('0')
+        total_paid = Decimal('0')
+        for contribution in contributions:
+            total_paid += contribution.amount_paid
+            if contribution.user_id == user.id:
+                paid += contribution.amount_paid
 
-    user_owes = ExpenseShare.objects.filter(
-        expense__group=group,
-        user=user,
-    ).exclude(expense__paid_by=user).values('expense__currency').annotate(
-        total=Sum('amount_owed')
-    )
-    for row in user_owes:
-        balances[row['expense__currency']] -= row['total']
+        share = Decimal('0')
+        total_shares = Decimal('0')
+        for s in expense.shares.all():
+            total_shares += s.amount_owed
+            if s.user_id == user.id:
+                share += s.amount_owed
+
+        net = paid - share
+        # Absorb share-rounding residual (e.g. 3×$3.33=$9.99 instead of $10.00)
+        # into each contributor proportionally so balances sum to zero after settlement.
+        if paid > Decimal('0') and total_paid > Decimal('0'):
+            residual = total_paid - total_shares
+            if Decimal('0') < abs(residual) <= Decimal('0.05'):
+                net -= (paid / total_paid) * residual
+
+        if net != Decimal('0'):
+            balances[expense.currency] += net
 
     payments_received = Payment.objects.filter(
         group=group,
@@ -1509,6 +1576,133 @@ def calculate_group_balance(user, group):
     return dict({k: v for k, v in balances.items() if v != 0})
 
 
+def _to_decimal(value):
+    try:
+        return Decimal(str(value)).quantize(Decimal('0.01'))
+    except Exception:
+        return Decimal('0.00')
+
+
+def _allocate_equal_shares(total_amount, participants):
+    if not participants:
+        return {}
+    total_cents = int((total_amount * 100).to_integral_value())
+    base = total_cents // len(participants)
+    remainder = total_cents % len(participants)
+    shares = {}
+    for idx, user in enumerate(participants):
+        cents = base + (1 if idx < remainder else 0)
+        shares[str(user.id)] = (Decimal(cents) / Decimal('100')).quantize(Decimal('0.01'))
+    return shares
+
+
+def _save_expense_contributions(expense, contributions, total_amount, fallback_user):
+    rows = contributions or [{'user': fallback_user, 'amount': total_amount}]
+    total = Decimal('0')
+    for row in rows:
+        amount = _to_decimal(row['amount'])
+        if amount <= 0:
+            continue
+        ExpenseContribution.objects.create(
+            expense=expense,
+            user=row['user'],
+            amount_paid=amount,
+        )
+        total += amount
+
+    if total != total_amount:
+        raise ValueError('Contribution total does not match expense amount.')
+
+
+def _save_expense_shares(expense, participants, split_type, total_amount, split_amounts, split_percentages):
+    if split_type == 'equal':
+        shares = _allocate_equal_shares(total_amount, participants)
+        for user in participants:
+            amount = shares.get(str(user.id), Decimal('0'))
+            ExpenseShare.objects.create(
+                expense=expense,
+                user=user,
+                amount_owed=amount,
+                is_paid=False,
+            )
+        return
+
+    if split_type == 'unequal':
+        for user in participants:
+            amount = _to_decimal(split_amounts.get(str(user.id), Decimal('0')))
+            ExpenseShare.objects.create(
+                expense=expense,
+                user=user,
+                amount_owed=amount,
+                is_paid=False,
+            )
+        return
+
+    if split_type == 'percentage':
+        participant_ids = [str(u.id) for u in participants]
+        running_total = Decimal('0.00')
+        rows = []
+        for idx, user in enumerate(participants):
+            percent = _to_decimal(split_percentages.get(str(user.id), Decimal('0')))
+            if idx == len(participants) - 1:
+                amount = (total_amount - running_total).quantize(Decimal('0.01'))
+            else:
+                amount = (total_amount * percent / Decimal('100')).quantize(Decimal('0.01'))
+                running_total += amount
+            rows.append((user, amount, percent))
+
+        # Apply any residual due to quantization to the highest percentage owner.
+        diff = total_amount - sum(r[1] for r in rows)
+        if diff != 0 and rows:
+            adjust_idx = max(range(len(rows)), key=lambda i: rows[i][2])
+            user, amount, percent = rows[adjust_idx]
+            rows[adjust_idx] = (user, amount + diff, percent)
+
+        for user, amount, percent in rows:
+            ExpenseShare.objects.create(
+                expense=expense,
+                user=user,
+                amount_owed=amount.quantize(Decimal('0.01')),
+                share_percentage=percent,
+                is_paid=False,
+            )
+        return
+
+
+def _build_expense_form_data(request):
+    if 'application/json' not in (request.content_type or ''):
+        return request.POST
+
+    payload = json.loads(request.body or '{}')
+    data = QueryDict('', mutable=True)
+
+    data['title'] = str(payload.get('description') or payload.get('title') or '')
+    data['total_amount'] = str(payload.get('total_amount') or '')
+    data['currency'] = str(payload.get('currency') or 'USD')
+    raw_contributions = payload.get('contributions', [])
+    default_paid_by = ''
+    if payload.get('paid_by'):
+        default_paid_by = str(payload.get('paid_by'))
+    elif raw_contributions:
+        default_paid_by = str(raw_contributions[0].get('user', ''))
+    data['paid_by'] = default_paid_by
+    data['date'] = str(payload.get('date') or timezone.now().date())
+    data['split_type'] = str(payload.get('split_type') or 'equal')
+    data['notes'] = str(payload.get('notes') or '')
+
+    participants = [str(p) for p in payload.get('participants', [])]
+    data.setlist('participants', participants)
+
+    data['contributions_json'] = json.dumps(raw_contributions)
+
+    if payload.get('split_type') == 'percentage':
+        source = payload.get('percentages', payload.get('shares', []))
+    else:
+        source = payload.get('shares', [])
+    data['split_values_json'] = json.dumps(source)
+    return data
+
+
 def calculate_user_balances(user, groups):
     """Compute dashboard bilateral balances from per-group outstanding edges.
 
@@ -1516,13 +1710,15 @@ def calculate_user_balances(user, groups):
     ``calculate_group_balance_matrix(group)`` where each edge means:
       from_user (debtor) ---- amount/currency ----> to_user (creditor)
 
-    For each edge involving the logged-in user:
-      - user is creditor: friend owes user   -> owed_to_user += amount
-      - user is debtor:   user owes friend   -> owed_by_user += amount
+        For each edge involving the logged-in user:
+            - user is creditor: friend owes user   -> owed_to_user += amount
+            - user is debtor:   user owes friend   -> owed_by_user += amount
 
-    Friend channels are aggregated across all groups by friend+currency without
-    subtracting inside a channel. Net (for total/ordering) is derived as
-    owed_to_user - owed_by_user.
+        Dashboard aggregation rule:
+            - net balances per friend per currency only
+            - never mix currencies
+            - for same currency, net = owed_to_user - owed_by_user
+            - positive net stays in owed_to_user, negative net stays in owed_by_user
     """
     from .currencies import format_multi_currency_balance
     from .fx_service import fetch_fx_rates, detect_net_sign
@@ -1553,15 +1749,24 @@ def calculate_user_balances(user, groups):
 
     result = []
     for friend_id, channels in friend_channels.items():
-        owed_to_user = {c: v for c, v in channels['owed_to_user'].items() if v != 0}
-        owed_by_user = {c: v for c, v in channels['owed_by_user'].items() if v != 0}
+        raw_owed_to_user = {c: v for c, v in channels['owed_to_user'].items() if v != 0}
+        raw_owed_by_user = {c: v for c, v in channels['owed_by_user'].items() if v != 0}
 
-        currencies = set(owed_to_user.keys()) | set(owed_by_user.keys())
+        currencies = set(raw_owed_to_user.keys()) | set(raw_owed_by_user.keys())
         net_balances = {}
+        owed_to_user = {}
+        owed_by_user = {}
         for currency in currencies:
-            net = owed_to_user.get(currency, Decimal('0')) - owed_by_user.get(currency, Decimal('0'))
-            if net != 0:
-                net_balances[currency] = net
+            net = raw_owed_to_user.get(currency, Decimal('0')) - raw_owed_by_user.get(currency, Decimal('0'))
+            if abs(net) < Decimal('0.005'):
+                continue
+
+            net = net.quantize(Decimal('0.01'))
+            net_balances[currency] = net
+            if net > 0:
+                owed_to_user[currency] = net
+            elif net < 0:
+                owed_by_user[currency] = abs(net)
 
         if not owed_to_user and not owed_by_user:
             continue
@@ -1583,10 +1788,7 @@ def calculate_user_balances(user, groups):
 
     # sort largest exposure first (sum of both channels)
     result.sort(
-        key=lambda x: (
-            sum(abs(float(v)) for v in x['owed_to_user'].values())
-            + sum(abs(float(v)) for v in x['owed_by_user'].values())
-        ),
+        key=lambda x: sum(abs(float(v)) for v in x['balances'].values()),
         reverse=True,
     )
 
@@ -1607,6 +1809,66 @@ def calculate_dashboard_total_from_bilateral(balances_by_user):
             totals[currency] -= amount
 
     return {currency: amount for currency, amount in totals.items() if amount != 0}
+
+
+def _simplify_edges_per_currency(edges):
+    """Collapse reverse-direction redundancies per currency.
+
+    Input rows are dicts:
+      {'from_user': User, 'to_user': User, 'amount': Decimal, 'currency': str, 'symbol': str}
+
+    Output guarantees:
+      - no self-edges
+      - no opposite-direction duplicates for same pair+currency
+      - tiny residuals dropped
+    """
+    merged = {}
+
+    for edge in edges:
+        amount = Decimal(str(edge.get('amount', '0')))
+        if amount <= Decimal('0'):
+            continue
+
+        from_user = edge['from_user']
+        to_user = edge['to_user']
+        currency = edge['currency']
+        symbol = edge['symbol']
+
+        if from_user.id == to_user.id:
+            continue
+
+        key = (str(from_user.id), str(to_user.id), currency)
+        reverse_key = (str(to_user.id), str(from_user.id), currency)
+
+        if reverse_key in merged:
+            reverse = merged[reverse_key]
+            reverse['amount'] -= amount
+            if reverse['amount'] < Decimal('0'):
+                reverse['amount'] = abs(reverse['amount'])
+                reverse['from_user'], reverse['to_user'] = reverse['to_user'], reverse['from_user']
+                del merged[reverse_key]
+                merged[key] = reverse
+        else:
+            if key not in merged:
+                merged[key] = {
+                    'from_user': from_user,
+                    'to_user': to_user,
+                    'amount': Decimal('0'),
+                    'currency': currency,
+                    'symbol': symbol,
+                }
+            merged[key]['amount'] += amount
+
+    rows = []
+    for row in merged.values():
+        if abs(row['amount']) < Decimal('0.005'):
+            continue
+        row['amount'] = row['amount'].quantize(Decimal('0.01'))
+        if row['amount'] > Decimal('0'):
+            rows.append(row)
+
+    rows.sort(key=lambda r: (r['currency'], r['from_user'].get_display_name().lower(), r['to_user'].get_display_name().lower()))
+    return rows
 
 def calculate_group_balance_matrix(group):
     """Calculate who owes who in a group per currency (net outstanding debts after payments)."""
@@ -1670,7 +1932,7 @@ def calculate_group_balance_matrix(group):
             if debt == 0:
                 j += 1
 
-    return simplified
+    return _simplify_edges_per_currency(simplified)
 
 
 def calculate_settlements(group):
@@ -1727,7 +1989,7 @@ def calculate_settlements(group):
             if debt == 0:
                 j += 1
 
-    return settlements
+    return _simplify_edges_per_currency(settlements)
 
 
 def get_group_currencies(group):

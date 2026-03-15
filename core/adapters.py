@@ -19,7 +19,7 @@ class CustomAccountAdapter(DefaultAccountAdapter):
         return user
 
     def _link_person_identities(self, user):
-        from .models import PersonIdentity, GroupMembership, GroupInvite, ExpenseShare, Payment, Expense, Activity
+        from .models import PersonIdentity, GroupMembership, GroupInvite, ExpenseShare, ExpenseContribution, Payment, Expense, Activity
         identities = PersonIdentity.objects.filter(linked_user__isnull=True)
         matching = identities.none()
         if user.email and not user.email.endswith('@placeholder.splitgood.local'):
@@ -47,6 +47,7 @@ class CustomAccountAdapter(DefaultAccountAdapter):
                 placeholder = identity.placeholder_user
                 with transaction.atomic():
                     ExpenseShare.objects.filter(user=placeholder).update(user=user)
+                    ExpenseContribution.objects.filter(user=placeholder).update(user=user)
                     Payment.objects.filter(from_user=placeholder).update(from_user=user)
                     Payment.objects.filter(to_user=placeholder).update(to_user=user)
                     Expense.objects.filter(paid_by=placeholder).update(paid_by=user)

@@ -2,6 +2,7 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 from django.contrib.auth import get_user_model
+from decimal import Decimal
 import logging
 
 logger = logging.getLogger(__name__)
@@ -84,14 +85,18 @@ def send_invite_notification(self, invite_id):
 def send_expense_notification(self, expense_id):
     from .models import Expense
     try:
-        expense = Expense.objects.select_related('group', 'paid_by').prefetch_related('shares__user').get(id=expense_id)
+        expense = Expense.objects.select_related('group', 'paid_by').prefetch_related('shares__user', 'contributions__user').get(id=expense_id)
     except Expense.DoesNotExist:
         logger.warning(f"[Expense] Expense {expense_id} not found, skipping")
         return
 
-    payer = expense.paid_by.get_display_name()
+    contribution_rows = expense.get_contributions()
+    payer = ', '.join(c.user.get_display_name() for c in contribution_rows)
+    paid_map = {str(c.user_id): c.amount_paid for c in contribution_rows}
     for share in expense.shares.select_related('user').all():
-        if share.user != expense.paid_by and share.user.email and not share.user.email.endswith('@placeholder.splitgood.local'):
+        paid = paid_map.get(str(share.user_id), Decimal('0'))
+        net = paid - share.amount_owed
+        if net < 0 and share.user.email and not share.user.email.endswith('@placeholder.splitgood.local'):
             try:
                 _send_email(
                     subject=f"New expense: {expense.title}",
@@ -133,11 +138,12 @@ def send_daily_balance_reminders(self):
     sent_count = 0
     for user in users:
         balance = user.get_total_balance()
-        if balance < 0:
+        has_negative = any(v < Decimal('0') for v in balance.values()) if isinstance(balance, dict) else False
+        if has_negative:
             try:
                 _send_email(
                     subject="Splitgood: You have outstanding balances",
-                    message=f"Hi {user.get_display_name()}, you currently owe ${abs(balance):.2f} across your groups. Log in to settle up!",
+                    message=f"Hi {user.get_display_name()}, you currently have outstanding balances across your groups. Log in to settle up!",
                     recipient_list=[user.email],
                 )
                 sent_count += 1
@@ -183,7 +189,7 @@ def send_weekly_summary(self):
                     message=(
                         f"Hi {user.get_display_name()},\n\n"
                         f"This week: {new_expenses} new expense(s), {new_payments} payment(s).\n"
-                        f"Your net balance: ${balance:.2f}\n\n"
+                        f"Your net balance map: {balance}\n\n"
                         f"Log in to see details!"
                     ),
                     recipient_list=[user.email],

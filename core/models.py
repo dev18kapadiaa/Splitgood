@@ -58,26 +58,26 @@ class User(AbstractUser):
         Positive = others owe you money (net creditor)
         Negative = you owe others money (net debtor)
         """
-        from django.db.models import Sum
         from collections import defaultdict
-        
+        from django.db.models import Sum
+
         balances = defaultdict(lambda: Decimal('0'))
-        
-        owed_to_user = ExpenseShare.objects.filter(
-            expense__paid_by=self
-        ).exclude(user=self).values('expense__currency').annotate(
-            total=Sum('amount_owed')
-        )
-        for row in owed_to_user:
-            balances[row['expense__currency']] += row['total']
-        
-        user_owes = ExpenseShare.objects.filter(
-            user=self
-        ).exclude(expense__paid_by=self).values('expense__currency').annotate(
-            total=Sum('amount_owed')
-        )
-        for row in user_owes:
-            balances[row['expense__currency']] -= row['total']
+
+        expenses = Expense.objects.prefetch_related('shares', 'contributions').all()
+        for expense in expenses:
+            paid = Decimal('0')
+            for contribution in expense.get_contributions():
+                if contribution.user_id == self.id:
+                    paid += contribution.amount_paid
+
+            share = Decimal('0')
+            for share_row in expense.shares.all():
+                if share_row.user_id == self.id:
+                    share += share_row.amount_owed
+
+            net = paid - share
+            if net != 0:
+                balances[expense.currency] += net
         
         payments_received = Payment.objects.filter(
             to_user=self
@@ -272,6 +272,32 @@ class Expense(models.Model):
     
     def __str__(self):
         return f"{self.title} - ${self.total_amount}"
+
+    def get_contributions(self):
+        """Return persisted contributions or fallback to legacy single payer."""
+        rows = list(self.contributions.select_related('user').all())
+        if rows:
+            return rows
+        return [
+            ExpenseContribution(
+                expense=self,
+                user=self.paid_by,
+                amount_paid=self.total_amount,
+            )
+        ]
+
+    def get_paid_amount_map(self):
+        paid_map = {}
+        for row in self.get_contributions():
+            paid_map[row.user_id] = paid_map.get(row.user_id, Decimal('0')) + row.amount_paid
+        return paid_map
+
+    def get_primary_payer(self):
+        """Keep legacy UI wording by selecting the largest contributor."""
+        rows = self.get_contributions()
+        if not rows:
+            return self.paid_by
+        return max(rows, key=lambda r: r.amount_paid).user
     
     def get_payer_share(self):
         """Get the share owed by the person who paid"""
@@ -293,6 +319,20 @@ class ExpenseShare(models.Model):
     
     def __str__(self):
         return f"{self.user.get_display_name()} owes ${self.amount_owed} for {self.expense.title}"
+
+
+class ExpenseContribution(models.Model):
+    """Tracks who actually paid and how much for an expense."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    expense = models.ForeignKey(Expense, on_delete=models.CASCADE, related_name='contributions')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='expense_contributions')
+    amount_paid = models.DecimalField(max_digits=12, decimal_places=2)
+
+    class Meta:
+        unique_together = ['expense', 'user']
+
+    def __str__(self):
+        return f"{self.user.get_display_name()} paid ${self.amount_paid} for {self.expense.title}"
 
 
 class Payment(models.Model):

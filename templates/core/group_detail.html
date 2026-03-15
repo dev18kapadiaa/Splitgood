@@ -262,20 +262,24 @@
                 <div class="expense-details">
                     <div class="expense-title">{{ expense.title }}</div>
                     <div class="expense-meta">
-                        {{ expense.paid_by.get_display_name }} paid · {{ expense.date|date:"M d, Y" }}
+                        {{ expense.payer_display_name }} paid · {{ expense.date|date:"M d, Y" }}
                     </div>
                 </div>
                 <div class="expense-amount">
                     <div class="expense-total">{{ expense.currency|currency_symbol }}{{ expense.total_amount|floatformat:2 }}</div>
-                    {% with user_share=expense.shares.all|dictsort:"user_id" %}
-                    {% for share in user_share %}
-                    {% if share.user == user %}
-                    <div class="expense-share {% if expense.paid_by == user %}balance-positive{% else %}balance-negative{% endif %}">
-                        {% if expense.paid_by == user %}you lent {{ expense.currency|currency_symbol }}{{ share.amount_owed|floatformat:2 }}{% else %}you owe {{ expense.currency|currency_symbol }}{{ share.amount_owed|floatformat:2 }}{% endif %}
+                    {% if expense.current_user_net > 0 %}
+                    <div class="expense-share balance-positive">
+                        you are owed {{ expense.currency|currency_symbol }}{{ expense.current_user_net|floatformat:2 }}
+                    </div>
+                    {% elif expense.current_user_net < 0 %}
+                    <div class="expense-share balance-negative">
+                        you owe {{ expense.currency|currency_symbol }}{{ expense.current_user_net|floatformat:2|cut:"-" }}
+                    </div>
+                    {% else %}
+                    <div class="expense-share balance-neutral">
+                        settled
                     </div>
                     {% endif %}
-                    {% endfor %}
-                    {% endwith %}
                 </div>
             </a>
             {% endfor %}

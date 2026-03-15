@@ -48,8 +48,18 @@
                 </div>
                 <div style="color: var(--text-muted); font-size: 0.875rem;">{{ expense.currency }}</div>
                 <div style="color: var(--text-secondary);">
-                    Paid by <strong>{{ expense.paid_by.get_display_name }}</strong>
+                    Primary payer: <strong>{{ primary_payer.get_display_name }}</strong>
                 </div>
+            </div>
+
+            <div style="margin-bottom: 1.5rem;">
+                <div style="font-size: 0.8125rem; color: var(--text-muted); margin-bottom: 0.5rem;">Who Paid</div>
+                {% for contribution in contributions %}
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.25rem;">
+                    <span>{{ contribution.user.get_display_name }}</span>
+                    <strong>{{ expense.currency|currency_symbol }}{{ contribution.amount_paid|floatformat:2 }}</strong>
+                </div>
+                {% endfor %}
             </div>
             
             <div style="display: grid; gap: 1rem;">
@@ -94,29 +104,24 @@
         </div>
         <div class="card-body">
             <div class="members-list">
-                {% for share in shares %}
+                {% for row in participant_rows %}
                 <div class="member-item" data-testid="share-item-{{ forloop.counter }}">
-                    {% include 'core/includes/user_avatar.html' with user_obj=share.user avatar_class='member-avatar' size=40 %}
+                    {% include 'core/includes/user_avatar.html' with user_obj=row.user avatar_class='member-avatar' size=40 %}
                     <div class="member-info">
                         <div class="member-name">
-                            {{ share.user.get_display_name }}
-                            {% if share.user == expense.paid_by %}
-                            <span style="background: var(--success-light); color: var(--success); padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; margin-left: 0.5rem;">Paid</span>
-                            {% endif %}
+                            {{ row.user.get_display_name }}
                         </div>
                         <div class="member-role">
-                            {% if share.user == expense.paid_by %}
-                                Paid {{ expense.currency|currency_symbol }}{{ expense.total_amount|floatformat:2 }}
-                            {% else %}
-                                Owes
-                            {% endif %}
+                            Paid {{ expense.currency|currency_symbol }}{{ row.paid|floatformat:2 }} · Share {{ expense.currency|currency_symbol }}{{ row.share|floatformat:2 }}
                         </div>
                     </div>
-                    <div class="member-balance {% if share.user == expense.paid_by %}balance-positive{% else %}balance-negative{% endif %}">
-                        {% if share.user == expense.paid_by %}
-                            +{{ expense.currency|currency_symbol }}{{ share.amount_owed|floatformat:2 }}
+                    <div class="member-balance {% if row.balance > 0 %}balance-positive{% elif row.balance < 0 %}balance-negative{% else %}balance-neutral{% endif %}">
+                        {% if row.balance > 0 %}
+                            +{{ expense.currency|currency_symbol }}{{ row.balance|floatformat:2 }}
+                        {% elif row.balance < 0 %}
+                            -{{ expense.currency|currency_symbol }}{{ row.balance|floatformat:2|cut:"-" }}
                         {% else %}
-                            -{{ expense.currency|currency_symbol }}{{ share.amount_owed|floatformat:2 }}
+                            {{ expense.currency|currency_symbol }}0.00
                         {% endif %}
                     </div>
                 </div>
